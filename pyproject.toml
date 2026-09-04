@@ -1,0 +1,16 @@
+[project]
+name = "tshirt-pipeline"
+version = "0.1.0"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "rembg[cpu]>=2.0.60",
+    "vtracer>=0.6.11",
+    "pillow>=10.0",
+    "numpy",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+markers = ["slow: needs the rembg model download"]
