@@ -32,10 +32,12 @@ Không làm:
   pipeline.py       # toàn bộ logic, một file
   pyproject.toml    # phụ thuộc Python (uv quản lý)
   input/            # người dùng thả ảnh vào đây (png, jpg, jpeg, webp)
+  input/done/       # ảnh gốc đã xử lý thành công được chuyển vào đây
   input/failed/     # ảnh xử lý lỗi được chuyển vào đây
   output/           # PNG kết quả, cùng tên file gốc, đuôi .png
   review/           # ảnh so sánh gốc | kết quả, cùng tên file gốc
   work/             # file trung gian (đã tách nền, svg), có thể xóa
+  bin/              # realesrgan-ncnn-vulkan + models/ (chỉ cho chế độ raster)
   tests/            # pytest, dùng ảnh tổng hợp tự vẽ
 ```
 
