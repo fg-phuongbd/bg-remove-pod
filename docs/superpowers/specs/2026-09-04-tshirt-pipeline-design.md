@@ -26,7 +26,7 @@ Không làm:
 ## 3. Cấu trúc thư mục
 
 ```
-~/tshirt-pipeline/
+~/Phuong-data/tshirt-pipeline/
   setup.sh          # cài một lần
   run.sh            # gọi pipeline.py trong môi trường uv
   pipeline.py       # toàn bộ logic, một file
