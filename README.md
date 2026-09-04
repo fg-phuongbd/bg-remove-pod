@@ -43,8 +43,8 @@ Mỗi ảnh được nhận diện **nền** và **kiểu thiết kế**, in ra 
 | Nền ảnh gốc | Cách tách nền | Dùng cho |
 |---|---|---|
 | **đen** (thiết kế cho áo tối) | Chuyển độ sáng thành độ trong suốt: pixel đen thành trong suốt để áo hiện ra, màu được bù để in lên áo đen ra đúng ảnh gốc. Glow, airbrush, texture giữ nguyên. | Tranh band merch, airbrush, gradient trên nền đen |
-| **trắng** | Ngược lại của trên, cho áo trắng | Thiết kế trên nền trắng in áo trắng |
-| **nền màu khác** | Tách nền bằng model BiRefNet | Minh họa trên nền trơn bất kỳ |
+| **trắng hoặc màu khác** | Tách nền bằng model BiRefNet (cắt hình thật, in lên áo màu nào cũng được) | Minh họa trên nền trơn |
+| **trắng, chỉ khi thêm `--bg white`** | Ngược lại của cách nền đen, cho áo trắng | Thiết kế có glow trắng in áo trắng |
 | **đã trong suốt** | Bỏ qua bước tách nền | PNG đã có nền trong suốt từ công cụ AI |
 
 Ép kiểu nền bằng `--bg black|white|ai|none` khi nhận diện sai. Ví dụ ảnh nền trắng nhưng in áo đen thì dùng `--bg ai`.

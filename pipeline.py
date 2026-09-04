@@ -348,8 +348,8 @@ def flatten_raster(img: Image.Image, colors: int, merge_delta_e: float = MERGE_D
 
 # ---------------------------------------------------------------- background keying
 def detect_bg(img: Image.Image) -> str:
-    """Look at the 2 % border ring: 'none' (already transparent), 'black' (dark shirt art),
-    'white', or 'ai' (use rembg)."""
+    """Look at the 2 % border ring: 'none' (already transparent), 'black' (dark shirt art,
+    keyed), or 'ai' (use rembg; also for white backgrounds unless --bg white is given)."""
     rgba = np.asarray(img.convert("RGBA"))
     h, w = rgba.shape[:2]
     t = max(2, round(min(w, h) * 0.02))
@@ -358,11 +358,11 @@ def detect_bg(img: Image.Image) -> str:
         return "none"
     a = rgba[:, :, :3]
     ring = np.concatenate([a[:t].reshape(-1, 3), a[-t:].reshape(-1, 3), a[:, :t].reshape(-1, 3), a[:, -t:].reshape(-1, 3)])
-    mx, mn = np.median(ring.max(axis=1)), np.median(ring.min(axis=1))
+    mx = np.median(ring.max(axis=1))
     if mx < 60:
         return "black"
-    if mn > 200:
-        return "white"
+    # A white background is NOT keyed by default: designs on white are usually printed on any
+    # shirt color, so they need a real cutout (rembg). Pass --bg white to key for white shirts.
     return "ai"
 
 

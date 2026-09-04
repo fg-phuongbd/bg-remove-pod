@@ -17,7 +17,7 @@ def _dark_art():
 
 def test_detect_bg():
     assert pipeline.detect_bg(_dark_art()) == "black"
-    assert pipeline.detect_bg(Image.new("RGB", (100, 100), (250, 250, 248))) == "white"
+    assert pipeline.detect_bg(Image.new("RGB", (100, 100), (250, 250, 248))) == "ai"  # white is cut out, not keyed
     assert pipeline.detect_bg(Image.new("RGB", (100, 100), (120, 200, 90))) == "ai"
     assert pipeline.detect_bg(Image.new("RGBA", (100, 100), (0, 0, 0, 0))) == "none"
 
