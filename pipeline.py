@@ -68,10 +68,10 @@ def fit_box(w: int, h: int, box: tuple[int, int]) -> tuple[int, int]:
     return max(1, int(w * scale)), max(1, int(h * scale))  # floor: never exceed the box
 
 
-def crop_to_content(img: Image.Image, margin: float = 0.02) -> Image.Image:
-    """Crop to the bounding box of alpha > 0, padded by margin per side."""
+def crop_to_content(img: Image.Image, margin: float = 0.02, min_alpha: int = 1) -> Image.Image:
+    """Crop to the bounding box of alpha >= min_alpha, padded by margin per side."""
     alpha = np.asarray(img.convert("RGBA"))[:, :, 3]
-    ys, xs = np.nonzero(alpha)
+    ys, xs = np.nonzero(alpha >= min_alpha)
     if len(xs) == 0:
         raise EmptyResult("tách nền ra rỗng, không còn pixel nào")
     x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
@@ -317,18 +317,18 @@ def render_svg(svg_path: Path, box: tuple[int, int]) -> Image.Image:
 
 
 # ---------------------------------------------------------------- raster
-def upscale(img: Image.Image, scale: int = 4) -> Image.Image:
-    """Real-ESRGAN anime model if the binary exists, else Lanczos."""
-    img = img.convert("RGBA")
+def upscale(img: Image.Image, scale: int = 4, model: str = "realesrgan-x4plus-anime") -> Image.Image:
+    """Real-ESRGAN if the binary exists (anime model for flat art, x4plus for painterly), else Lanczos."""
+    img = img.convert("RGBA") if img.mode == "RGBA" else img.convert("RGB")
     if REALESRGAN_BIN.exists():
         with tempfile.TemporaryDirectory() as td:
             src, dst = Path(td) / "in.png", Path(td) / "out.png"
             img.save(src)
             subprocess.run([str(REALESRGAN_BIN), "-i", str(src), "-o", str(dst),
-                            "-n", "realesrgan-x4plus-anime", "-s", str(scale),
+                            "-n", model, "-s", str(scale),
                             "-m", str(BIN_DIR / "models")],
                            check=True, capture_output=True, text=True)
-            return Image.open(dst).convert("RGBA").copy()
+            return Image.open(dst).convert(img.mode).copy()
     print("  CẢNH BÁO: không có Real-ESRGAN trong bin/, dùng Lanczos thay thế")
     return img.resize((img.width * scale, img.height * scale), Image.Resampling.LANCZOS)
 
@@ -344,6 +344,69 @@ def tighten_alpha(img: Image.Image, lo: int = 96, hi: int = 160) -> Image.Image:
 def flatten_raster(img: Image.Image, colors: int, merge_delta_e: float = MERGE_DELTA_E) -> Image.Image:
     """Tighten alpha, then quantize (includes median denoise) keeping the thin soft edge."""
     return quantize(tighten_alpha(img), colors, binary_alpha=False, merge_delta_e=merge_delta_e)
+
+
+# ---------------------------------------------------------------- background keying
+def detect_bg(img: Image.Image) -> str:
+    """Look at the 2 % border ring: 'none' (already transparent), 'black' (dark shirt art),
+    'white', or 'ai' (use rembg)."""
+    rgba = np.asarray(img.convert("RGBA"))
+    h, w = rgba.shape[:2]
+    t = max(2, round(min(w, h) * 0.02))
+    alpha_ring = np.concatenate([rgba[:t, :, 3].ravel(), rgba[-t:, :, 3].ravel(), rgba[:, :t, 3].ravel(), rgba[:, -t:, 3].ravel()])
+    if np.median(alpha_ring) == 0:
+        return "none"
+    a = rgba[:, :, :3]
+    ring = np.concatenate([a[:t].reshape(-1, 3), a[-t:].reshape(-1, 3), a[:, :t].reshape(-1, 3), a[:, -t:].reshape(-1, 3)])
+    mx, mn = np.median(ring.max(axis=1)), np.median(ring.min(axis=1))
+    if mx < 60:
+        return "black"
+    if mn > 200:
+        return "white"
+    return "ai"
+
+
+def key_bg(img: Image.Image, bg: str) -> Image.Image:
+    """Turn a black (or white) background into transparency the way dark-shirt printers do.
+
+    black: alpha = max(R,G,B) mapped from the background level to 255, color un-premultiplied
+    (c / alpha) so that printing the result on a black shirt reproduces the original exactly.
+    Glows and airbrush fade naturally into the shirt. Design pixels that are truly black
+    become transparent too, which is correct: the shirt is black.
+    white: the mirror image (alpha = 255 - min(R,G,B)), for white shirts.
+    """
+    rgb = np.asarray(img.convert("RGB")).astype(np.float32)
+    h, w = rgb.shape[:2]
+    if bg == "white":
+        rgb = 255.0 - rgb  # solve as black, then invert the colors back
+    key = rgb.max(axis=2)
+    t = max(2, round(min(w, h) * 0.02))
+    ring = np.concatenate([key[:t].ravel(), key[-t:].ravel(), key[:, :t].ravel(), key[:, -t:].ravel()])
+    lo = float(np.percentile(ring, 99)) + 6.0  # just above the background's noise ceiling
+    alpha = np.clip((key - lo) / (255.0 - lo), 0.0, 1.0)
+    safe = np.where(alpha > 0, alpha, 1.0)
+    color = np.clip(rgb / safe[:, :, None], 0, 255)  # un-premultiply: color * alpha == original
+    if bg == "white":
+        color = 255.0 - color
+    out = np.dstack([color, alpha * 255.0]).round().astype(np.uint8)
+    return Image.fromarray(out, "RGBA")
+
+
+def detect_style(cut: Image.Image) -> str:
+    """'flat' when most *design* pixels (alpha >= 128) sit in locally uniform color, else 'detail'.
+    Used to pick the upscale model (anime for flat art, x4plus for painterly)."""
+    im = cut.convert("RGBA")
+    im.thumbnail((512, 512))
+    rgba = np.asarray(im)
+    a = rgba[:, :, :3].astype(np.float32)
+    mean = np.asarray(Image.fromarray(rgba[:, :, :3]).filter(ImageFilter.BoxBlur(2))).astype(np.float32)
+    local_dev = np.abs(a - mean).sum(axis=2)
+    edge = _edge_mask(np.asarray(Image.fromarray(rgba[:, :, :3]).filter(ImageFilter.MedianFilter(5))), threshold=40)
+    body = (rgba[:, :, 3] >= 128) & ~edge
+    if body.sum() < 100:
+        return "detail"
+    flat_fraction = float((local_dev[body] < 12).mean())
+    return "flat" if flat_fraction > 0.75 else "detail"
 
 
 # ---------------------------------------------------------------- background
@@ -396,15 +459,16 @@ def _checkerboard(size: tuple[int, int], cell: int = 32) -> Image.Image:
     return Image.fromarray(tile, "L").convert("RGBA")
 
 
-def make_review(original: Image.Image, result: Image.Image, path: Path, height: int = 800, gap: int = 20) -> None:
-    """Original on the left, result on a checkerboard on the right."""
+def make_review(original: Image.Image, result: Image.Image, path: Path, height: int = 800, gap: int = 20,
+                shirt: tuple[int, int, int] | None = None) -> None:
+    """Original on the left, result on the right over a checkerboard (or a shirt color when keyed)."""
     def scaled(im: Image.Image) -> Image.Image:
         return im.convert("RGBA").resize((max(1, round(im.width * height / im.height)), height), Image.Resampling.LANCZOS)
 
     left, right = scaled(original), scaled(result)
     canvas = Image.new("RGBA", (left.width + gap + right.width, height), (255, 255, 255, 255))
     canvas.paste(left, (0, 0), left)
-    board = _checkerboard(right.size)
+    board = Image.new("RGBA", right.size, shirt + (255,)) if shirt else _checkerboard(right.size)
     board.alpha_composite(right)
     canvas.paste(board, (left.width + gap, 0))
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -417,31 +481,53 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     original = Image.open(src)
     original.load()
     original = original.convert("RGBA")
-
-    no_bg = remove_bg(original)
-    if args.fill_holes:
-        no_bg = fill_holes(no_bg, original)
-    cut = crop_to_content(no_bg)
     WORK_DIR.mkdir(parents=True, exist_ok=True)
-    cut_path = WORK_DIR / f"{src.stem}-cut.png"
-    cut.save(cut_path)
 
-    if args.raster:
-        big = upscale(cut)
-        big = big.resize(fit_box(*big.size, box), Image.Resampling.LANCZOS)
-        result = flatten_raster(big, args.colors, args.merge)
+    bg = detect_bg(original) if args.bg == "auto" else args.bg
+    if bg == "none":
+        cut = crop_to_content(original)
+        shirt = None
+    elif bg == "ai":
+        no_bg = remove_bg(original)
+        if args.fill_holes:
+            no_bg = fill_holes(no_bg, original)
+        cut = crop_to_content(no_bg)
+        shirt = None
     else:
-        q = quantize(cut, args.colors, binary_alpha=True, merge_delta_e=args.merge)
+        cut = crop_to_content(key_bg(original, bg), min_alpha=40)
+        shirt = (20, 20, 22) if bg == "black" else (245, 245, 245)
+    cut.save(WORK_DIR / f"{src.stem}-cut.png")
+
+    style = detect_style(cut) if args.style == "auto" else args.style
+    colors = args.colors if args.colors is not None else (12 if args.vector else 0)
+    model = "realesrgan-x4plus-anime" if style == "flat" else "realesrgan-x4plus"
+    print(f"  nền: {bg} | kiểu: {style} | {'vector' if args.vector else 'raster'}"
+          f"{f', gom {colors} màu' if colors else ', giữ nguyên màu'}")
+
+    if args.vector:
+        q = quantize(cut, colors, binary_alpha=True, merge_delta_e=args.merge)
         q_path = WORK_DIR / f"{src.stem}-quant.png"
         q.save(q_path)
         svg_path = WORK_DIR / f"{src.stem}.svg"
         trace_svg(q_path, svg_path)
         result = render_svg(svg_path, box)
+    elif bg in ("ai", "none"):
+        big = upscale(cut, model=model)
+        big = big.resize(fit_box(*big.size, box), Image.Resampling.LANCZOS)
+        result = flatten_raster(big, colors, args.merge) if colors else tighten_alpha(big)
+    else:
+        # keyed background: upscale the flat RGB first (cleaner edges, denoised background),
+        # key at full resolution, then crop
+        big_rgb = upscale(original.convert("RGB"), model=model)
+        keyed = crop_to_content(key_bg(big_rgb, bg), min_alpha=40)
+        result = keyed.resize(fit_box(*keyed.size, box), Image.Resampling.LANCZOS)
+        if colors:
+            result = flatten_raster(result, colors, args.merge)
 
     result = place_on_canvas(result, box)
     out_path = OUTPUT_DIR / f"{src.stem}.png"
     save_print_png(result, out_path)
-    make_review(original, result, REVIEW_DIR / f"{src.stem}.png")
+    make_review(original, result, REVIEW_DIR / f"{src.stem}.png", shirt=shirt)
     return out_path
 
 
@@ -459,8 +545,14 @@ def _move(src: Path, sub: str) -> None:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="AI flat illustration -> print-ready transparent PNG (300 DPI).")
-    p.add_argument("--raster", action="store_true", help="dùng chế độ raster (upscale + gom màu) thay cho vector")
-    p.add_argument("--colors", type=int, default=12, help="số màu tối đa sau khi gom (mặc định 12)")
+    p.add_argument("--bg", choices=["auto", "black", "white", "ai", "none"], default="auto",
+                   help="nền của ảnh gốc: black/white = chuyển độ sáng thành trong suốt (in áo tối/sáng), ai = tách nền bằng model, none = ảnh đã trong suốt. auto = tự nhận diện")
+    p.add_argument("--vector", action="store_true",
+                   help="minh họa phẳng: gom màu rồi trace vector (mảng màu tuyệt đối phẳng, viền cong mượt). Mặc định là raster: upscale AI, giữ nguyên màu")
+    p.add_argument("--style", choices=["auto", "flat", "detail"], default="auto",
+                   help="chọn model upscale: flat = tranh phẳng, detail = tranh có gradient/texture. auto = tự nhận diện")
+    p.add_argument("--colors", type=int, default=None,
+                   help="gom về tối đa N màu. Mặc định: 12 khi --vector, không gom khi raster. 0 = không gom")
     p.add_argument("--merge", type=float, default=MERGE_DELTA_E,
                    help=f"ngưỡng gộp màu gần nhau (CIELAB ΔE, mặc định {MERGE_DELTA_E:g}). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác nhau bị gộp")
     p.add_argument("--size", default=DEFAULT_SIZE,
@@ -480,9 +572,8 @@ def main(argv: list[str] | None = None) -> int:
     if not files:
         print(f"Không có ảnh nào trong {INPUT_DIR}")
         return 0
-    mode = "raster" if args.raster else "vector"
     box = target_box_px(args.size)
-    print(f"{len(files)} ảnh | chế độ {mode} | {args.colors} màu, gộp ΔE<{args.merge:g} | file in {box[0]}x{box[1]} px @ {DPI} DPI")
+    print(f"{len(files)} ảnh | {'vector' if args.vector else 'raster'} | file in {box[0]}x{box[1]} px @ {DPI} DPI")
 
     ok, failed = [], []
     for i, src in enumerate(files, 1):

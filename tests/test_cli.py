@@ -9,13 +9,13 @@ import pipeline
 
 def test_parse_args_defaults():
     a = pipeline.parse_args([])
-    assert a.raster is False and a.colors == 12 and a.size == "4500x5100"
+    assert a.vector is False and a.colors is None and a.size == "4500x5100" and a.bg == "auto" and a.style == "auto"
     assert a.keep_input is False and a.files == []
 
 
 def test_parse_args_flags():
-    a = pipeline.parse_args(["--raster", "--colors", "6", "--size", "21x29.7", "--keep-input", "a.png"])
-    assert a.raster and a.colors == 6 and a.size == "21x29.7" and a.keep_input and a.files == ["a.png"]
+    a = pipeline.parse_args(["--vector", "--colors", "6", "--size", "21x29.7", "--keep-input", "a.png"])
+    assert a.vector and a.colors == 6 and a.size == "21x29.7" and a.keep_input and a.files == ["a.png"]
 
 
 @pytest.mark.skipif(shutil.which("resvg") is None, reason="resvg not installed")
@@ -29,7 +29,7 @@ def test_main_batch_isolates_failures(tmp_path, monkeypatch, red_circle):
     red_circle.save(pipeline.INPUT_DIR / "ok.png")
     (pipeline.INPUT_DIR / "bad.png").write_text("not an image")
 
-    rc = pipeline.main(["--size", "1181x1000"])
+    rc = pipeline.main(["--vector", "--size", "1181x1000"])
 
     assert rc == 1
     out = Image.open(pipeline.OUTPUT_DIR / "ok.png")
