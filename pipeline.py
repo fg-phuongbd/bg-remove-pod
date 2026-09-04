@@ -26,12 +26,14 @@ WORK_DIR = ROOT / "work"
 BIN_DIR = ROOT / "bin"
 REALESRGAN_BIN = BIN_DIR / "realesrgan-ncnn-vulkan"
 DPI = 300
+DEFAULT_SIZE = "4500x5100"  # px; Printful/Merch-style print file (38.1 x 43.2 cm at 300 DPI)
 REMBG_MODEL = "birefnet-general"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+MERGE_DELTA_E = 12.0  # default for --merge: palette colors closer than this (CIELAB) are always merged
 VTRACER_OPTS = dict(
     colormode="color", hierarchical="stacked", mode="spline",
-    filter_speckle=4, color_precision=8, corner_threshold=60, path_precision=3,
-)
+    color_precision=8, corner_threshold=60, path_precision=3,
+)  # filter_speckle is computed per image in trace_svg
 
 
 class EmptyResult(Exception):
@@ -40,9 +42,24 @@ class EmptyResult(Exception):
 
 # ---------------------------------------------------------------- geometry
 def target_box_px(size: str) -> tuple[int, int]:
-    """'30x40' (cm) -> (3543, 4724) px at 300 DPI."""
-    w_cm, h_cm = (float(v) for v in size.lower().split("x"))
-    return round(w_cm / 2.54 * DPI), round(h_cm / 2.54 * DPI)
+    """'4500x5100' -> pixels as given; '30x40' (values < 200 are cm) -> (3543, 4724) at 300 DPI."""
+    def num(tok: str) -> float:
+        tok = tok.strip().replace(",", "")
+        if re.fullmatch(r"\d{1,3}\.\d{3}", tok):  # Vietnamese thousands dot: 4.500 -> 4500
+            tok = tok.replace(".", "")
+        return float(tok)
+
+    w, h = (num(v) for v in size.lower().split("x"))
+    if w >= 200 and h >= 200:
+        return round(w), round(h)
+    return round(w / 2.54 * DPI), round(h / 2.54 * DPI)
+
+
+def place_on_canvas(img: Image.Image, box: tuple[int, int]) -> Image.Image:
+    """Center img on a transparent canvas of exactly box size (img must already fit)."""
+    canvas = Image.new("RGBA", box, (0, 0, 0, 0))
+    canvas.paste(img, ((box[0] - img.width) // 2, (box[1] - img.height) // 2))
+    return canvas
 
 
 def fit_box(w: int, h: int, box: tuple[int, int]) -> tuple[int, int]:
@@ -65,17 +82,197 @@ def crop_to_content(img: Image.Image, margin: float = 0.02) -> Image.Image:
 
 
 # ---------------------------------------------------------------- color
-def quantize(img: Image.Image, colors: int, binary_alpha: bool) -> Image.Image:
-    """Reduce RGB to `colors` flat colors; keep alpha separately."""
+def _rgb_to_lab(rgb: np.ndarray) -> np.ndarray:
+    """sRGB (0-255, Nx3) -> CIELAB (Nx3). Good enough for palette merging."""
+    c = rgb.astype(np.float64) / 255.0
+    c = np.where(c > 0.04045, ((c + 0.055) / 1.055) ** 2.4, c / 12.92)
+    m = np.array([[0.4124, 0.3576, 0.1805], [0.2126, 0.7152, 0.0722], [0.0193, 0.1192, 0.9505]])
+    xyz = c @ m.T / np.array([0.95047, 1.0, 1.08883])
+    f = np.where(xyz > 0.008856, np.cbrt(xyz), 7.787 * xyz + 16 / 116)
+    return np.stack([116 * f[:, 1] - 16, 500 * (f[:, 0] - f[:, 1]), 200 * (f[:, 1] - f[:, 2])], axis=1)
+
+
+def _merge_palette(palette: np.ndarray, counts: np.ndarray, colors: int, merge_delta_e: float = MERGE_DELTA_E) -> np.ndarray:
+    """Agglomeratively merge the closest pair (in Lab) until <= colors remain and no pair is
+    closer than MERGE_DELTA_E. Returns, per input entry, the index of its final group.
+
+    Merging by distance rather than population keeps small distinct regions
+    (an eye highlight, a mouth) from being absorbed by large noisy ones.
+    """
+    lab = _rgb_to_lab(palette)
+    n = len(palette)
+    centers, weights = lab.copy(), counts.astype(np.float64)
+    parent = np.arange(n)
+    active = np.ones(n, dtype=bool)
+    D = np.linalg.norm(centers[:, None] - centers[None], axis=2)
+    np.fill_diagonal(D, np.inf)
+    n_active = n
+    while n_active > 1:
+        a, b = np.unravel_index(np.argmin(D), D.shape)
+        if n_active <= colors and D[a, b] >= merge_delta_e:
+            break
+        centers[a] = (centers[a] * weights[a] + centers[b] * weights[b]) / (weights[a] + weights[b])
+        weights[a] += weights[b]
+        active[b] = False
+        parent[parent == b] = a
+        D[b, :] = np.inf
+        D[:, b] = np.inf
+        d = np.linalg.norm(centers - centers[a], axis=1)
+        d[~active] = np.inf
+        d[a] = np.inf
+        D[a, :] = d
+        D[:, a] = d
+        n_active -= 1
+    _, mapping = np.unique(parent, return_inverse=True)
+    return mapping
+
+
+def _edge_mask(rgb: np.ndarray, threshold: int = 30) -> np.ndarray:
+    """True near color boundaries (anti-aliased ramps), at any resolution.
+
+    Neighbours are sampled `step` px away (≈1/500 of the short side) so a soft ramp in a
+    4500 px image is detected as firmly as a 1 px edge in a 600 px one; the mask is then
+    grown by 2*step px.
+    """
+    h, w = rgb.shape[:2]
+    step = max(1, round(min(w, h) / 500))
+    a = rgb.astype(np.int16)
+    p = np.pad(a, ((step, step), (step, step), (0, 0)), mode="edge")
+    diff = np.zeros((h, w), dtype=np.int16)
+    for dy, dx in ((0, step), (0, -step), (step, 0), (-step, 0)):
+        diff = np.maximum(diff, np.abs(a - p[step + dy:h + step + dy, step + dx:w + step + dx]).sum(axis=2))
+    edge = diff > threshold
+    grow = 2 * step
+    p2 = np.pad(edge, grow, mode="edge")
+    out = edge.copy()
+    for s in range(1, grow + 1):
+        out |= p2[grow - s:grow - s + h, grow:grow + w] | p2[grow + s:grow + s + h, grow:grow + w]
+        out |= p2[grow:grow + h, grow - s:grow - s + w] | p2[grow:grow + h, grow + s:grow + s + w]
+    return out
+
+
+def _erode(mask: np.ndarray, r: int) -> np.ndarray:
+    """Binary erosion by a (2r+1) square, separable, no scipy."""
+    out = mask.copy()
+    for axis in (0, 1):
+        acc = out.copy()
+        for s in range(1, r + 1):
+            acc &= np.roll(out, s, axis=axis) & np.roll(out, -s, axis=axis)
+        out = acc
+    return out
+
+
+def _absorb_scattered(labels: np.ndarray, final: np.ndarray, opaque: np.ndarray, max_dist: float) -> np.ndarray:
+    """Relabel colors that are both spatially scattered (mostly thin specks) and chromatically
+    close (< max_dist in Lab) to another color: that combination is AI grain, not a design
+    color. Compact small regions and thin-but-distinct outlines are left alone.
+    """
+    h, w = labels.shape
+    r = max(1, round(min(w, h) / 300))
+    lab = _rgb_to_lab(np.rint(final))
+    k = len(final)
+    changed = True
+    while changed:
+        changed = False
+        counts = np.bincount(labels[opaque], minlength=k)
+        alive = counts > 0
+        for i in np.argsort(counts):  # smallest first
+            if not alive[i]:
+                continue
+            m = (labels == i) & opaque
+            frac = _erode(m, r).sum() / counts[i]
+            if frac >= 0.35:
+                continue
+            d = np.linalg.norm(lab - lab[i], axis=1)
+            d[~alive] = np.inf
+            d[i] = np.inf
+            j = int(np.argmin(d))
+            if d[j] < max_dist:
+                labels[m] = j
+                alive[i] = False
+                changed = True
+                break
+    return labels
+
+
+def _decontaminate_fringe(labels: np.ndarray, alpha: np.ndarray, max_iter: int = 64) -> np.ndarray:
+    """Give every semi-transparent pixel the color label of its nearest fully opaque neighbour.
+
+    Background removal leaves fringe pixels blended with the old background (a light halo on
+    a dark shirt). Growing the solid colors outward into the fringe fixes that in place.
+    """
+    labels = labels.copy()
+    fixed = alpha == 255
+    todo = (alpha > 0) & ~fixed
+    for _ in range(max_iter):
+        if not todo.any():
+            break
+        newly = np.zeros_like(fixed)
+        for axis, s in ((0, 1), (0, -1), (1, 1), (1, -1)):
+            src_fixed = np.roll(fixed, s, axis=axis)
+            take = todo & src_fixed & ~newly
+            labels[take] = np.roll(labels, s, axis=axis)[take]
+            newly |= take
+        fixed |= newly
+        todo &= ~newly
+    return labels
+
+
+def quantize(img: Image.Image, colors: int, binary_alpha: bool, merge_delta_e: float = MERGE_DELTA_E) -> Image.Image:
+    """Reduce RGB to at most `colors` flat colors; keep alpha separately.
+
+    1. Median-filter to kill AI grain.
+    2. Bin colors at 16 levels per channel; every non-trivial bin among *interior* pixels
+       (anti-aliased edges excluded) becomes a palette candidate, so a small white
+       highlight gets its own entry no matter how few pixels it has.
+    3. Merge candidates by perceptual distance down to `colors` (and always merge
+       near-identical noise shades).
+    4. Snap every pixel (edges included) to the nearest final color.
+    """
     rgba = np.asarray(img.convert("RGBA")).copy()
     alpha = rgba[:, :, 3]
     opaque = alpha > 0
     rgb = rgba[:, :, :3]
     if opaque.any():
-        # fill transparent pixels with the mean opaque color so they do not steal palette slots
+        # fill transparent pixels with the mean opaque color so they do not create their own bins
         rgb[~opaque] = rgb[opaque].mean(axis=0).astype(np.uint8)
-    q = Image.fromarray(rgb, "RGB").quantize(colors=colors, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
-    flat = np.asarray(q.convert("RGB"))
+    arr = np.asarray(Image.fromarray(rgb, "RGB").filter(ImageFilter.MedianFilter(5)))
+    bins = arr >> 4
+    bin_id = (bins[:, :, 0].astype(np.int32) << 8) | (bins[:, :, 1].astype(np.int32) << 4) | bins[:, :, 2]
+
+    # Interior pixels weigh 1, anti-aliased edge pixels 0.1: blends between two colors
+    # cannot pull a small highlight toward them, but a thin outline (all "edge") still
+    # accumulates enough weight to earn its own palette entry.
+    edge = _edge_mask(arr)
+    weight = np.where(edge, 0.1, 1.0) * (alpha == 255)  # semi-transparent fringe never votes
+    if not opaque.any():
+        weight = np.ones_like(weight)
+    flat_ids = bin_id.ravel()
+    flat_w = weight.ravel()
+    used, inv = np.unique(flat_ids[flat_w > 0], return_inverse=True)
+    wsel = flat_w[flat_w > 0]
+    counts = np.bincount(inv, weights=wsel)
+    sums = np.zeros((len(used), 3))
+    np.add.at(sums, inv, arr.reshape(-1, 3)[flat_w > 0].astype(np.float64) * wsel[:, None])
+    means = sums / counts[:, None]
+    keep = counts >= max(8.0, 0.0001 * counts.sum())  # drop stray noise bins
+    if keep.sum() >= 1:
+        means, counts = means[keep], counts[keep]
+    if len(means) > 600:  # gradients: keep the most populated candidates
+        top = np.argsort(counts)[-600:]
+        means, counts = means[top], counts[top]
+
+    mapping = _merge_palette(means, counts, colors, merge_delta_e)
+    final = np.array([np.average(means[mapping == gi], axis=0, weights=counts[mapping == gi])
+                      for gi in range(mapping.max() + 1)])
+
+    # snap all 4096 possible bins (by bin centre) to the nearest final color in Lab
+    grid = np.indices((16, 16, 16)).reshape(3, -1).T * 16 + 8
+    d = np.linalg.norm(_rgb_to_lab(grid)[:, None] - _rgb_to_lab(np.rint(final))[None], axis=2)
+    labels = np.argmin(d, axis=1)[bin_id]
+    labels = _absorb_scattered(labels, final, opaque, max_dist=2 * merge_delta_e)
+    labels = _decontaminate_fringe(labels, alpha)
+    flat = np.rint(final).astype(np.uint8)[labels]
     if binary_alpha:
         alpha = np.where(alpha >= 128, 255, 0).astype(np.uint8)
     else:
@@ -92,7 +289,12 @@ def check_tools() -> None:
 def trace_svg(png_path: Path, svg_path: Path) -> None:
     import vtracer  # heavy import kept local
 
-    vtracer.convert_image_to_svg_py(str(png_path), str(svg_path), **VTRACER_OPTS)
+    with Image.open(png_path) as im:
+        w, h = im.size
+    # vtracer squares this value into an area: drop patches smaller than ~1/15000 of the
+    # image (≈7x7 px at 1024). Such specks are AI noise and invisible in print anyway.
+    speckle = max(2, round((w * h / 15000) ** 0.5))
+    vtracer.convert_image_to_svg_py(str(png_path), str(svg_path), filter_speckle=speckle, **VTRACER_OPTS)
 
 
 def _svg_size(svg_path: Path) -> tuple[int, int]:
@@ -131,12 +333,17 @@ def upscale(img: Image.Image, scale: int = 4) -> Image.Image:
     return img.resize((img.width * scale, img.height * scale), Image.Resampling.LANCZOS)
 
 
-def flatten_raster(img: Image.Image, colors: int) -> Image.Image:
-    """Median-filter noise away, then quantize while keeping soft alpha."""
-    rgba = img.convert("RGBA")
-    rgb = rgba.convert("RGB").filter(ImageFilter.MedianFilter(5))
-    rgb.putalpha(rgba.getchannel("A"))
-    return quantize(rgb, colors, binary_alpha=False)
+def tighten_alpha(img: Image.Image, lo: int = 96, hi: int = 160) -> Image.Image:
+    """Steepen the alpha ramp so edges stay crisp for DTF/DTG (soft alpha prints as a halo)."""
+    rgba = np.asarray(img.convert("RGBA")).copy()
+    a = rgba[:, :, 3].astype(np.float32)
+    rgba[:, :, 3] = np.clip((a - lo) * 255.0 / (hi - lo), 0, 255).astype(np.uint8)
+    return Image.fromarray(rgba, "RGBA")
+
+
+def flatten_raster(img: Image.Image, colors: int, merge_delta_e: float = MERGE_DELTA_E) -> Image.Image:
+    """Tighten alpha, then quantize (includes median denoise) keeping the thin soft edge."""
+    return quantize(tighten_alpha(img), colors, binary_alpha=False, merge_delta_e=merge_delta_e)
 
 
 # ---------------------------------------------------------------- background
@@ -148,9 +355,30 @@ def remove_bg(img: Image.Image) -> Image.Image:
     import rembg  # heavy import kept local
 
     if _SESSION is None:
-        print(f"  Nạp model {REMBG_MODEL} (lần đầu sẽ tải ~900 MB về ~/.u2net/)...")
+        print(f"  Nạp model {REMBG_MODEL} (lần đầu sẽ tải ~900 MB về ~/.rembg/models/)...")
         _SESSION = rembg.new_session(REMBG_MODEL)
     return rembg.remove(img.convert("RGBA"), session=_SESSION, alpha_matting=False).convert("RGBA")
+
+
+def fill_holes(cut: Image.Image, original: Image.Image) -> Image.Image:
+    """Make enclosed transparent regions opaque again, restoring RGB from the original.
+
+    Background removal deletes white details (eye highlights, teeth) that match the
+    background. Only regions NOT connected to the image border are filled, so the
+    surrounding background stays transparent. Intentional see-through holes (letter
+    counters, rings) get filled too, which is why this is opt-in (--fill-holes).
+    """
+    alpha = np.asarray(cut.convert("RGBA"))[:, :, 3]
+    mask = Image.fromarray(np.where(alpha < 128, 0, 255).astype(np.uint8), "L")
+    padded = Image.new("L", (mask.width + 2, mask.height + 2), 0)
+    padded.paste(mask, (1, 1))
+    ImageDraw.floodfill(padded, (0, 0), 128)  # background connected to the border -> 128
+    enclosed = np.asarray(padded)[1:-1, 1:-1] == 0
+    out = np.asarray(cut.convert("RGBA")).copy()
+    orig = np.asarray(original.convert("RGBA").resize(cut.size))
+    out[enclosed, :3] = orig[enclosed, :3]
+    out[enclosed, 3] = 255
+    return Image.fromarray(out, "RGBA")
 
 
 # ---------------------------------------------------------------- export
@@ -190,23 +418,27 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     original.load()
     original = original.convert("RGBA")
 
-    cut = crop_to_content(remove_bg(original))
+    no_bg = remove_bg(original)
+    if args.fill_holes:
+        no_bg = fill_holes(no_bg, original)
+    cut = crop_to_content(no_bg)
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     cut_path = WORK_DIR / f"{src.stem}-cut.png"
     cut.save(cut_path)
 
     if args.raster:
         big = upscale(cut)
-        flat = flatten_raster(big, args.colors)
-        result = flat.resize(fit_box(*flat.size, box), Image.Resampling.LANCZOS)
+        big = big.resize(fit_box(*big.size, box), Image.Resampling.LANCZOS)
+        result = flatten_raster(big, args.colors, args.merge)
     else:
-        q = quantize(cut, args.colors, binary_alpha=True)
+        q = quantize(cut, args.colors, binary_alpha=True, merge_delta_e=args.merge)
         q_path = WORK_DIR / f"{src.stem}-quant.png"
         q.save(q_path)
         svg_path = WORK_DIR / f"{src.stem}.svg"
         trace_svg(q_path, svg_path)
         result = render_svg(svg_path, box)
 
+    result = place_on_canvas(result, box)
     out_path = OUTPUT_DIR / f"{src.stem}.png"
     save_print_png(result, out_path)
     make_review(original, result, REVIEW_DIR / f"{src.stem}.png")
@@ -229,7 +461,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="AI flat illustration -> print-ready transparent PNG (300 DPI).")
     p.add_argument("--raster", action="store_true", help="dùng chế độ raster (upscale + gom màu) thay cho vector")
     p.add_argument("--colors", type=int, default=12, help="số màu tối đa sau khi gom (mặc định 12)")
-    p.add_argument("--size", default="30x40", help="khung in theo cm, dạng WxH (mặc định 30x40)")
+    p.add_argument("--merge", type=float, default=MERGE_DELTA_E,
+                   help=f"ngưỡng gộp màu gần nhau (CIELAB ΔE, mặc định {MERGE_DELTA_E:g}). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác nhau bị gộp")
+    p.add_argument("--size", default=DEFAULT_SIZE,
+                   help=f"kích thước file in, dạng WxH: pixel (vd 4500x5100) hoặc cm nếu số nhỏ hơn 200 (vd 30x40). Mặc định {DEFAULT_SIZE}")
+    p.add_argument("--fill-holes", action="store_true",
+                   help="lấp các vùng trong suốt bị bao kín (chấm sáng, răng bị khoét). Không dùng nếu thiết kế có lỗ xuyên cố ý")
     p.add_argument("--keep-input", action="store_true", help="không chuyển ảnh gốc sang input/done/")
     p.add_argument("files", nargs="*", help="chỉ xử lý các file này thay cho cả input/")
     return p.parse_args(argv)
@@ -245,7 +482,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     mode = "raster" if args.raster else "vector"
     box = target_box_px(args.size)
-    print(f"{len(files)} ảnh | chế độ {mode} | {args.colors} màu | khung {args.size} cm = {box[0]}x{box[1]} px")
+    print(f"{len(files)} ảnh | chế độ {mode} | {args.colors} màu, gộp ΔE<{args.merge:g} | file in {box[0]}x{box[1]} px @ {DPI} DPI")
 
     ok, failed = [], []
     for i, src in enumerate(files, 1):

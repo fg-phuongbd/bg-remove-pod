@@ -1,6 +1,6 @@
 # tshirt-pipeline — Thiết kế
 
-Ngày: 2026-09-04. Trạng thái: chờ người dùng duyệt.
+Ngày: 2026-09-04. Trạng thái: đã duyệt và triển khai (xem §10 cho các thay đổi).
 
 ## 1. Mục tiêu
 
@@ -131,3 +131,21 @@ Pytest với ảnh tổng hợp tự vẽ bằng Pillow (không phụ thuộc mo
 - **Một file `pipeline.py`**: dự án nhỏ, một người dùng. Tách hàm rõ ràng bên trong
   (`fit_box`, `crop_to_content`, `quantize`, `trace_svg`, `render_svg`, `remove_bg`,
   `process_one`, `main`) để test độc lập.
+
+## 10. Thay đổi so với thiết kế ban đầu (chốt khi triển khai, 2026-09-04)
+
+- **Kích thước mặc định** đổi từ khung 30 × 40 cm sang file in `4500x5100` px theo yêu cầu người dùng.
+  `--size` nhận pixel (số ≥ 200) hoặc cm. Kết quả được **căn giữa trên canvas đúng kích thước** thay cho
+  "vừa trong khung": xưởng in nhận file cố định 4500 × 5100.
+- **Gom màu tự viết** thay cho `Image.quantize(MEDIANCUT)`: median cut của Pillow không dành slot cho
+  vùng nhỏ (chấm sáng mắt bị đổi màu). Cách mới: bin 16 mức/kênh trên pixel bên trong mảng (pixel viền
+  trọng số 0.1, pixel bán trong suốt trọng số 0), gộp agglomerative theo ΔE CIELAB, luôn gộp cặp gần
+  hơn `--merge` (mặc định 12), hút màu "vừa phân tán vừa gần màu khác" (`_absorb_scattered`), và cho
+  pixel rìa bán trong suốt lấy màu mảng kề (`_decontaminate_fringe`).
+- **Cờ mới `--merge D`** và **`--fill-holes`** (lấp vùng trong suốt bị bao kín, vì BiRefNet khoét
+  chi tiết trắng cùng màu nền). `--fill-holes` mặc định tắt vì phá lỗ chữ cố ý.
+- **vtracer `filter_speckle`** tính theo ảnh: `round(sqrt(w*h/15000))` (vtracer bình phương giá trị
+  này thành diện tích).
+- **Chế độ raster**: co về khung in *trước* khi gom màu (co sau sẽ trộn màu lại), thêm bước siết
+  alpha (`tighten_alpha`, 96→160) để viền in không bị quầng.
+- Model rembg tải về `~/.rembg/models/`, không phải `~/.u2net/`.

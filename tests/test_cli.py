@@ -9,7 +9,7 @@ import pipeline
 
 def test_parse_args_defaults():
     a = pipeline.parse_args([])
-    assert a.raster is False and a.colors == 12 and a.size == "30x40"
+    assert a.raster is False and a.colors == 12 and a.size == "4500x5100"
     assert a.keep_input is False and a.files == []
 
 
@@ -29,13 +29,18 @@ def test_main_batch_isolates_failures(tmp_path, monkeypatch, red_circle):
     red_circle.save(pipeline.INPUT_DIR / "ok.png")
     (pipeline.INPUT_DIR / "bad.png").write_text("not an image")
 
-    rc = pipeline.main(["--size", "10x10"])
+    rc = pipeline.main(["--size", "1181x1000"])
 
     assert rc == 1
     out = Image.open(pipeline.OUTPUT_DIR / "ok.png")
-    assert out.size == (1181, 1181)
+    assert out.size == (1181, 1000)
     assert round(out.info["dpi"][0]) == 300
     assert (pipeline.INPUT_DIR / "done" / "ok.png").exists()
     assert (pipeline.INPUT_DIR / "failed" / "bad.png").exists()
     assert (pipeline.REVIEW_DIR / "ok.png").exists()
     assert not (pipeline.INPUT_DIR / "ok.png").exists()
+
+
+def test_parse_args_fill_holes():
+    assert pipeline.parse_args(["--fill-holes"]).fill_holes is True
+    assert pipeline.parse_args([]).fill_holes is False
