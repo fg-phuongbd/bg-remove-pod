@@ -149,3 +149,19 @@ Pytest với ảnh tổng hợp tự vẽ bằng Pillow (không phụ thuộc mo
 - **Chế độ raster**: co về khung in *trước* khi gom màu (co sau sẽ trộn màu lại), thêm bước siết
   alpha (`tighten_alpha`, 96→160) để viền in không bị quầng.
 - Model rembg tải về `~/.rembg/models/`, không phải `~/.u2net/`.
+
+## 11. Thay đổi sau lô ảnh thật đầu tiên (2026-09-04, chiều)
+
+Hai ảnh thật của người dùng là tranh band merch nền **đen**, airbrush, gradient, chữ nhỏ. Pipeline
+"rembg + gom 12 màu + vector" phá nát chúng. Kết luận: giả định "minh họa phẳng nền trơn sáng" không
+bao quát công việc thật.
+
+- **Raster là mặc định** (theo yêu cầu người dùng); vector là cờ `--vector` opt-in.
+- **Nhận diện nền qua viền ảnh** (`detect_bg`): `black` / `white` / `ai` / `none`.
+- **Nền đen/trắng: luminance keying** (`key_bg`) thay cho rembg: alpha = max(R,G,B) ánh xạ từ trần
+  nhiễu nền lên 255, màu un-premultiply (c / alpha) để composite lên áo đen ra đúng ảnh gốc. Upscale
+  RGB trước, key sau ở độ phân giải cao.
+- **Nhận diện kiểu** (`detect_style`, chỉ trên pixel thiết kế) chọn model Real-ESRGAN: anime cho
+  phẳng, x4plus cho có texture. Cờ `--style` để ép.
+- `--colors` mặc định không gom ở raster, 12 ở `--vector`.
+- Ảnh review composite lên nền áo đen khi key đen, để nhìn đúng như in.
