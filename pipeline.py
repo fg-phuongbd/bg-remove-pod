@@ -350,20 +350,46 @@ def flatten_raster(img: Image.Image, colors: int, merge_delta_e: float = MERGE_D
 def detect_bg(img: Image.Image) -> str:
     """Look at the 2 % border ring: 'none' (already transparent), 'black' (dark shirt art,
     keyed), or 'ai' (use rembg; also for white backgrounds unless --bg white is given)."""
-    rgba = np.asarray(img.convert("RGBA"))
-    h, w = rgba.shape[:2]
-    t = max(2, round(min(w, h) * 0.02))
-    alpha_ring = np.concatenate([rgba[:t, :, 3].ravel(), rgba[-t:, :, 3].ravel(), rgba[:, :t, 3].ravel(), rgba[:, -t:, 3].ravel()])
-    if np.median(alpha_ring) == 0:
+    ring = _border_ring(np.asarray(img.convert("RGBA")))
+    if np.median(ring[:, 3]) == 0:
         return "none"
-    a = rgba[:, :, :3]
-    ring = np.concatenate([a[:t].reshape(-1, 3), a[-t:].reshape(-1, 3), a[:, :t].reshape(-1, 3), a[:, -t:].reshape(-1, 3)])
-    mx = np.median(ring.max(axis=1))
+    mx = np.median(ring[:, :3].max(axis=1))
     if mx < 60:
         return "black"
     # A white background is NOT keyed by default: designs on white are usually printed on any
     # shirt color, so they need a real cutout (rembg). Pass --bg white to key for white shirts.
     return "ai"
+
+
+def _border_ring(a: np.ndarray, frac: float = 0.02) -> np.ndarray:
+    """Pixels of the outer ring (2 % of the short side), flattened to (N, C)."""
+    h, w = a.shape[:2]
+    t = max(2, round(min(w, h) * frac))
+    return np.concatenate([a[:t].reshape(-1, *a.shape[2:]), a[-t:].reshape(-1, *a.shape[2:]),
+                           a[:, :t].reshape(-1, *a.shape[2:]), a[:, -t:].reshape(-1, *a.shape[2:])])
+
+
+def bg_color(img: Image.Image) -> tuple[int, int, int]:
+    """Median color of the border ring: the solid background color of an AI render."""
+    ring = _border_ring(np.asarray(img.convert("RGB")))
+    return tuple(int(v) for v in np.median(ring, axis=0).round())
+
+
+def key_color(img: Image.Image, soft: float = 60.0) -> Image.Image:
+    """Turn a solid colored background (e.g. light pink) into transparency, for a shirt of that
+    same color. alpha ramps with the RGB distance from the background color, starting just above
+    the background's noise ceiling; color is un-premultiplied against the background so that
+    printing the result on a shirt of the background color reproduces the original exactly.
+    Design areas painted in the background color become transparent too (the shirt shows)."""
+    rgb = np.asarray(img.convert("RGB")).astype(np.float32)
+    bg = np.array(bg_color(img), dtype=np.float32)
+    dist = np.linalg.norm(rgb - bg, axis=2)
+    lo = float(np.percentile(np.linalg.norm(_border_ring(rgb) - bg, axis=1), 99)) + 6.0
+    alpha = np.clip((dist - lo) / soft, 0.0, 1.0)
+    safe = np.where(alpha > 0, alpha, 1.0)[:, :, None]
+    color = np.clip((rgb - (1.0 - alpha[:, :, None]) * bg) / safe, 0, 255)
+    out = np.dstack([color, alpha * 255.0]).round().astype(np.uint8)
+    return Image.fromarray(out, "RGBA")
 
 
 def key_bg(img: Image.Image, bg: str) -> Image.Image:
@@ -374,15 +400,15 @@ def key_bg(img: Image.Image, bg: str) -> Image.Image:
     Glows and airbrush fade naturally into the shirt. Design pixels that are truly black
     become transparent too, which is correct: the shirt is black.
     white: the mirror image (alpha = 255 - min(R,G,B)), for white shirts.
+    color: any other solid background, keyed by color distance (see key_color).
     """
+    if bg == "color":
+        return key_color(img)
     rgb = np.asarray(img.convert("RGB")).astype(np.float32)
-    h, w = rgb.shape[:2]
     if bg == "white":
         rgb = 255.0 - rgb  # solve as black, then invert the colors back
     key = rgb.max(axis=2)
-    t = max(2, round(min(w, h) * 0.02))
-    ring = np.concatenate([key[:t].ravel(), key[-t:].ravel(), key[:, :t].ravel(), key[:, -t:].ravel()])
-    lo = float(np.percentile(ring, 99)) + 6.0  # just above the background's noise ceiling
+    lo = float(np.percentile(_border_ring(key), 99)) + 6.0  # just above the background's noise ceiling
     alpha = np.clip((key - lo) / (255.0 - lo), 0.0, 1.0)
     safe = np.where(alpha > 0, alpha, 1.0)
     color = np.clip(rgb / safe[:, :, None], 0, 255)  # un-premultiply: color * alpha == original
@@ -495,7 +521,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         shirt = None
     else:
         cut = crop_to_content(key_bg(original, bg), min_alpha=40)
-        shirt = (20, 20, 22) if bg == "black" else (245, 245, 245)
+        shirt = {"black": (20, 20, 22), "white": (245, 245, 245)}.get(bg) or bg_color(original)
     cut.save(WORK_DIR / f"{src.stem}-cut.png")
 
     style = detect_style(cut) if args.style == "auto" else args.style
@@ -545,8 +571,8 @@ def _move(src: Path, sub: str) -> None:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="AI flat illustration -> print-ready transparent PNG (300 DPI).")
-    p.add_argument("--bg", choices=["auto", "black", "white", "ai", "none"], default="auto",
-                   help="nền của ảnh gốc: black/white = chuyển độ sáng thành trong suốt (in áo tối/sáng), ai = tách nền bằng model, none = ảnh đã trong suốt. auto = tự nhận diện")
+    p.add_argument("--bg", choices=["auto", "black", "white", "color", "ai", "none"], default="auto",
+                   help="nền của ảnh gốc: black/white = chuyển độ sáng thành trong suốt (in áo tối/sáng), color = key theo màu nền trơn (in áo cùng màu nền), ai = tách nền bằng model, none = ảnh đã trong suốt. auto = tự nhận diện (không bao giờ chọn color)")
     p.add_argument("--vector", action="store_true",
                    help="minh họa phẳng: gom màu rồi trace vector (mảng màu tuyệt đối phẳng, viền cong mượt). Mặc định là raster: upscale AI, giữ nguyên màu")
     p.add_argument("--style", choices=["auto", "flat", "detail"], default="auto",

@@ -45,9 +45,10 @@ Mỗi ảnh được nhận diện **nền** và **kiểu thiết kế**, in ra 
 | **đen** (thiết kế cho áo tối) | Chuyển độ sáng thành độ trong suốt: pixel đen thành trong suốt để áo hiện ra, màu được bù để in lên áo đen ra đúng ảnh gốc. Glow, airbrush, texture giữ nguyên. | Tranh band merch, airbrush, gradient trên nền đen |
 | **trắng hoặc màu khác** | Tách nền bằng model BiRefNet (cắt hình thật, in lên áo màu nào cũng được) | Minh họa trên nền trơn |
 | **trắng, chỉ khi thêm `--bg white`** | Ngược lại của cách nền đen, cho áo trắng | Thiết kế có glow trắng in áo trắng |
+| **màu trơn bất kỳ, chỉ khi thêm `--bg color`** | Key theo khoảng cách tới màu nền (lấy từ vành ảnh), bù màu để in lên áo **cùng màu nền** ra đúng ảnh gốc. Vùng vẽ bằng đúng màu nền cũng trong suốt (áo hiện ra). | Thiết kế vẽ thẳng lên nền màu áo (vd nền hồng in áo hồng) có tia, vết bắn mực mảnh mà BiRefNet cắt cụt hoặc để lại viền mờ |
 | **đã trong suốt** | Bỏ qua bước tách nền | PNG đã có nền trong suốt từ công cụ AI |
 
-Ép kiểu nền bằng `--bg black|white|ai|none` khi nhận diện sai. Ví dụ ảnh nền trắng nhưng in áo đen thì dùng `--bg ai`.
+Ép kiểu nền bằng `--bg black|white|color|ai|none` khi nhận diện sai (`color` không bao giờ được tự chọn). Ví dụ ảnh nền trắng nhưng in áo đen thì dùng `--bg ai`.
 
 Sau đó ảnh đi qua **raster** (mặc định): upscale 4 lần bằng Real-ESRGAN, giữ nguyên màu và chi tiết,
 co về khung in. Model upscale được chọn theo kiểu thiết kế: tranh phẳng dùng model anime, tranh có
@@ -59,7 +60,7 @@ gradient/texture dùng model chung. Với **minh họa phẳng thật sự** (m�
 | Cờ | Mặc định | Khi nào dùng |
 |---|---|---|
 | `--vector` | tắt | Minh họa phẳng: gom 12 màu rồi trace vector. Không dùng cho tranh có gradient, texture, chữ rất nhỏ. |
-| `--bg X` | auto | Ép kiểu nền: `black`, `white`, `ai`, `none`. |
+| `--bg X` | auto | Ép kiểu nền: `black`, `white`, `color`, `ai`, `none`. |
 | `--style X` | auto | Ép model upscale: `flat` hoặc `detail`. |
 | `--colors N` | không gom | Gom về N màu (raster) hoặc đổi số màu khi `--vector` (mặc định 12). |
 | `--merge D` | 12 | Ngưỡng gộp hai màu gần nhau khi gom (CIELAB ΔE). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác bị gộp. |
@@ -74,6 +75,7 @@ Ví dụ:
 ./run.sh                                   # thả gì cũng chạy, tự nhận diện
 ./run.sh --vector --fill-holes             # minh họa phẳng nền trắng, có chấm sáng trắng
 ./run.sh --bg ai input/done/abc.png        # ảnh nền đen nhưng muốn in lên áo trắng
+./run.sh --bg color input/hong.png         # nền hồng trơn, in áo hồng cùng màu
 ./run.sh --size 30x40                      # khổ 30 x 40 cm
 ```
 

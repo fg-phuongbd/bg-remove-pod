@@ -44,3 +44,7 @@ def test_main_batch_isolates_failures(tmp_path, monkeypatch, red_circle):
 def test_parse_args_fill_holes():
     assert pipeline.parse_args(["--fill-holes"]).fill_holes is True
     assert pipeline.parse_args([]).fill_holes is False
+
+
+def test_parse_args_bg_color():
+    assert pipeline.parse_args(["--bg", "color"]).bg == "color"

@@ -52,3 +52,32 @@ def test_detect_style(red_circle):
     rng = np.random.default_rng(5)
     noisy = Image.fromarray(rng.integers(0, 255, (400, 400, 3), dtype=np.uint8), "RGB")
     assert pipeline.detect_style(noisy) == "detail"
+
+
+def test_key_color_removes_solid_colored_background():
+    rng = np.random.default_rng(7)
+    bg = np.array([253, 190, 213])
+    a = (bg + rng.normal(0, 0.8, (300, 300, 3))).round().clip(0, 255).astype(np.uint8)  # light pink, AI noise
+    im = Image.fromarray(a, "RGB")
+    d = ImageDraw.Draw(im)
+    d.rectangle((50, 50, 150, 150), fill=(255, 20, 147))    # hot pink, far from bg
+    d.rectangle((160, 50, 260, 150), fill=(0, 0, 0))        # black
+    d.rectangle((50, 160, 150, 260), fill=(253, 160, 200))  # slightly darker pink: partial alpha
+    out = pipeline.key_bg(im, "color")
+    assert out.getpixel((10, 10))[3] == 0                    # background gone
+    assert out.getpixel((100, 100)) == (255, 20, 147, 255)   # design colors untouched
+    assert out.getpixel((210, 100)) == (0, 0, 0, 255)        # black is design here, not shirt
+    r, g, b, alpha = out.getpixel((100, 210))
+    assert 0 < alpha < 255
+    # compositing on the background color gives back the original (within rounding)
+    comp = np.asarray(out).astype(float)
+    al = comp[:, :, 3:] / 255.0
+    back = comp[:, :, :3] * al + bg * (1 - al)
+    assert np.abs(back[210, 100] - [253, 160, 200]).max() < 4  # numpy is [y, x]
+    assert np.abs(back[100, 100] - [255, 20, 147]).max() < 2
+
+
+def test_bg_color_returns_border_color():
+    im = Image.new("RGB", (100, 100), (253, 190, 213))
+    ImageDraw.Draw(im).rectangle((20, 20, 80, 80), fill=(0, 0, 0))
+    assert pipeline.bg_color(im) == (253, 190, 213)
