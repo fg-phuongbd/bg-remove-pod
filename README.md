@@ -36,46 +36,54 @@ Thử ngay với ảnh mẫu (minh họa phẳng nền trắng):
 cp examples/mascot.jpg input/ && ./run.sh --vector --fill-holes
 ```
 
-## Pipeline tự chọn đường xử lý
+## Một câu hỏi duy nhất: in lên áo màu gì?
 
-Mỗi ảnh được nhận diện **nền** và **kiểu thiết kế**, in ra ở dòng đầu khi xử lý:
+Pipeline nhìn **nền** của ảnh gốc (vành 2 % quanh ảnh: đen, trắng, màu trơn, hay đã trong suốt) và
+hỏi một điều: áo in **cùng màu nền** hay **khác màu nền**. Cờ `--shirt` trả lời câu đó, mặc định `auto`.
 
-| Nền ảnh gốc | Cách tách nền | Dùng cho |
-|---|---|---|
-| **đen** (thiết kế cho áo tối) | Chuyển độ sáng thành độ trong suốt: pixel đen thành trong suốt để áo hiện ra, màu được bù để in lên áo đen ra đúng ảnh gốc. Glow, airbrush, texture giữ nguyên. | Tranh band merch, airbrush, gradient trên nền đen |
-| **trắng hoặc màu khác** | Tách nền bằng model BiRefNet (cắt hình thật, in lên áo màu nào cũng được) | Minh họa trên nền trơn |
-| **trắng, chỉ khi thêm `--bg white`** | Ngược lại của cách nền đen, cho áo trắng | Thiết kế có glow trắng in áo trắng |
-| **màu trơn bất kỳ, chỉ khi thêm `--bg color`** | Key theo khoảng cách tới màu nền (lấy từ vành ảnh), bù màu để in lên áo **cùng màu nền** ra đúng ảnh gốc. Vùng vẽ bằng đúng màu nền cũng trong suốt (áo hiện ra). | Thiết kế vẽ thẳng lên nền màu áo (vd nền hồng in áo hồng) có tia, vết bắn mực mảnh mà BiRefNet cắt cụt hoặc để lại viền mờ |
-| **đã trong suốt** | Bỏ qua bước tách nền | PNG đã có nền trong suốt từ công cụ AI |
+| Nền ảnh gốc | `--shirt same` (áo cùng màu nền) | `--shirt other` (áo khác màu) | `auto` chọn |
+|---|---|---|---|
+| **đen** | Key nền đen: pixel đen thành trong suốt để áo hiện ra, màu được bù để in lên áo đen ra đúng ảnh gốc. Glow, airbrush giữ nguyên. | Cắt hình bằng BiRefNet, viền mềm được khử màu nền dính (Decontaminate Colors) | `same` (tranh nền đen là cho áo tối) |
+| **trắng** | Key nền trắng, cho thiết kế có glow trắng in áo trắng | Cắt hình bằng BiRefNet **+ tinh chỉnh viền** (như nền màu). Chi tiết trắng nhỏ bên trong mà model khoét nhầm được lấp lại; vùng trắng lớn bên trong nét viền vẫn trong suốt. | `other` |
+| **màu trơn** (hồng, xanh…) | Key màu nền: alpha theo khoảng cách tới màu nền, bù màu. Vùng vẽ bằng đúng màu nền cũng trong suốt. | Cắt hình bằng BiRefNet **+ tinh chỉnh viền**: bên trong tin model, dải viền quyết định từng pixel theo màu nền, nên bỏ được dải nền dính viền và lấy lại tia, chấm mực mảnh mà model cắt cụt. | `other` |
+| **đã trong suốt** | Bỏ qua tách nền | Bỏ qua tách nền | |
 
-Ép kiểu nền bằng `--bg black|white|color|ai|none` khi nhận diện sai (`color` không bao giờ được tự chọn). Ví dụ ảnh nền trắng nhưng in áo đen thì dùng `--bg ai`.
+Dòng đầu khi xử lý in ra quyết định này, ví dụ `nền: color | áo: khác màu nền | cách: cắt hình + tinh chỉnh viền`.
 
 Sau đó ảnh đi qua **raster** (mặc định): upscale 4 lần bằng Real-ESRGAN, giữ nguyên màu và chi tiết,
-co về khung in. Model upscale được chọn theo kiểu thiết kế: tranh phẳng dùng model anime, tranh có
-gradient/texture dùng model chung. Với **minh họa phẳng thật sự** (mảng màu, không gradient), thêm
+co về khung in. Model upscale được chọn theo kiểu thiết kế: tranh phẳng và line art ít màu dùng model
+anime, tranh có gradient/texture dùng model chung. Với **minh họa phẳng thật sự** (mảng màu, không gradient), thêm
 `--vector` để gom màu rồi trace vector: mảng màu tuyệt đối phẳng, viền cong mượt ở mọi kích cỡ.
 
 ## Các tùy chọn
 
+Hằng ngày chỉ cần ba cờ:
+
 | Cờ | Mặc định | Khi nào dùng |
 |---|---|---|
+| `--shirt X` | auto | `same` = áo cùng màu nền ảnh, `other` = áo khác màu. Xem bảng trên. |
+| `--size WxH` | 4500x5100 | Kích thước file in. Số ≥ 200 là pixel, nhỏ hơn là cm (`30x40`). |
 | `--vector` | tắt | Minh họa phẳng: gom 12 màu rồi trace vector. Không dùng cho tranh có gradient, texture, chữ rất nhỏ. |
-| `--bg X` | auto | Ép kiểu nền: `black`, `white`, `color`, `ai`, `none`. |
+| `file1 file2 …` | | Chỉ xử lý các file này. |
+
+Nâng cao, thường không cần:
+
+| Cờ | Mặc định | Khi nào dùng |
+|---|---|---|
 | `--style X` | auto | Ép model upscale: `flat` hoặc `detail`. |
 | `--colors N` | không gom | Gom về N màu (raster) hoặc đổi số màu khi `--vector` (mặc định 12). |
 | `--merge D` | 12 | Ngưỡng gộp hai màu gần nhau khi gom (CIELAB ΔE). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác bị gộp. |
-| `--fill-holes` | tắt | Chỉ với `--bg ai`: lấp chi tiết trắng bên trong hình bị model tách nền khoét mất. Không dùng nếu có lỗ chữ cố ý. |
-| `--size WxH` | 4500x5100 | Kích thước file in. Số ≥ 200 là pixel, nhỏ hơn là cm (`30x40`). |
+| `--fill-holes` | tắt | Khi cắt hình: lấp chi tiết trắng bên trong hình bị model khoét mất (mắt, răng). Không dùng nếu có lỗ chữ cố ý. |
 | `--keep-input` | tắt | Không chuyển ảnh gốc khỏi `input/`. |
-| `file1 file2 …` | | Chỉ xử lý các file này. |
+| `--bg X` | auto | Cờ ẩn, ép thẳng cách xử lý khi nhận diện nền sai: `black`, `white`, `color`, `ai`, `none`. Thắng `--shirt`. |
 
 Ví dụ:
 
 ```bash
-./run.sh                                   # thả gì cũng chạy, tự nhận diện
+./run.sh                                   # thả gì cũng chạy: nền đen in áo đen, còn lại in áo khác màu
+./run.sh --shirt same                      # nền hồng in áo hồng, nền trắng in áo trắng
+./run.sh --shirt other input/done/abc.png  # ảnh nền đen nhưng muốn in lên áo trắng
 ./run.sh --vector --fill-holes             # minh họa phẳng nền trắng, có chấm sáng trắng
-./run.sh --bg ai input/done/abc.png        # ảnh nền đen nhưng muốn in lên áo trắng
-./run.sh --bg color input/hong.png         # nền hồng trơn, in áo hồng cùng màu
 ./run.sh --size 30x40                      # khổ 30 x 40 cm
 ```
 
@@ -83,7 +91,7 @@ Ví dụ:
 
 Với ảnh nền đen, file ra có nhiều vùng **bán trong suốt** (glow, airbrush, vùng tối). Đây là cách
 chuẩn để in DTF/DTG lên áo đen: máy in dùng lớp lót trắng theo độ trong suốt, áo đen đóng vai trò màu
-đen của thiết kế. File này **chỉ đúng khi in lên áo đen hoặc rất tối**. In lên áo sáng thì dùng `--bg ai`.
+đen của thiết kế. File này **chỉ đúng khi in lên áo đen hoặc rất tối**. In lên áo sáng thì dùng `--shirt other`.
 
 ## Cách hoạt động
 

@@ -162,6 +162,12 @@ def _erode(mask: np.ndarray, r: int) -> np.ndarray:
     return out
 
 
+def _dilate(mask: np.ndarray, r: int) -> np.ndarray:
+    """Binary dilation by a (2r+1) square. Padded so nothing wraps around the image edge."""
+    padded = np.pad(mask, r, constant_values=False)
+    return ~_erode(~padded, r)[r:-r, r:-r]
+
+
 def _absorb_scattered(labels: np.ndarray, final: np.ndarray, opaque: np.ndarray, max_dist: float) -> np.ndarray:
     """Relabel colors that are both spatially scattered (mostly thin specks) and chromatically
     close (< max_dist in Lab) to another color: that combination is AI grain, not a design
@@ -347,18 +353,46 @@ def flatten_raster(img: Image.Image, colors: int, merge_delta_e: float = MERGE_D
 
 
 # ---------------------------------------------------------------- background keying
+BG_KINDS = ("none", "black", "white", "color")
+SHIRT_LABEL = {"same": "cùng màu nền", "other": "khác màu nền"}
+
+
 def detect_bg(img: Image.Image) -> str:
-    """Look at the 2 % border ring: 'none' (already transparent), 'black' (dark shirt art,
-    keyed), or 'ai' (use rembg; also for white backgrounds unless --bg white is given)."""
+    """What the 2 % border ring looks like: 'none' (already transparent), 'black', 'white',
+    or 'color' (any other solid color). resolve_bg turns this into a processing mode."""
     ring = _border_ring(np.asarray(img.convert("RGBA")))
     if np.median(ring[:, 3]) == 0:
         return "none"
-    mx = np.median(ring[:, :3].max(axis=1))
+    rgb = ring[:, :3].astype(int)
+    mx, mn = np.median(rgb.max(axis=1)), np.median(rgb.min(axis=1))
     if mx < 60:
         return "black"
-    # A white background is NOT keyed by default: designs on white are usually printed on any
-    # shirt color, so they need a real cutout (rembg). Pass --bg white to key for white shirts.
-    return "ai"
+    if mn > 200 and mx - mn < 24:
+        return "white"
+    return "color"
+
+
+def resolve_bg(kind: str, shirt: str) -> tuple[str, bool]:
+    """(processing mode, refine edge?) from the background kind and the shirt the design is for.
+
+    shirt 'same' = shirt is the background color -> key it (alpha from color, glows fade into
+    the shirt). shirt 'other' -> real cutout (rembg), plus edge refinement on white and colored
+    solid backgrounds, where the model leaves background slivers along the edges. 'auto': black art is for dark
+    shirts (key), everything else is cut out, as the batch default has always been."""
+    if kind == "none":
+        return "none", False
+    if shirt == "auto":
+        shirt = "same" if kind == "black" else "other"
+    if shirt == "same":
+        return kind, False  # black / white / color key
+    return "ai", kind in ("white", "color")
+
+
+def choose_mode(args: argparse.Namespace, kind: str) -> tuple[str, bool]:
+    """--bg (hidden override) wins; otherwise --shirt decides. Refine only for cutouts on colored bg."""
+    if args.bg != "auto":
+        return args.bg, args.bg == "ai" and kind in ("white", "color")
+    return resolve_bg(kind, args.shirt)
 
 
 def _border_ring(a: np.ndarray, frac: float = 0.02) -> np.ndarray:
@@ -377,15 +411,32 @@ def bg_color(img: Image.Image) -> tuple[int, int, int]:
 
 def key_color(img: Image.Image, soft: float = 60.0) -> Image.Image:
     """Turn a solid colored background (e.g. light pink) into transparency, for a shirt of that
-    same color. alpha ramps with the RGB distance from the background color, starting just above
-    the background's noise ceiling; color is un-premultiplied against the background so that
-    printing the result on a shirt of the background color reproduces the original exactly.
+    same color. A pixel's alpha is its RGB distance from the background relative to the strongest
+    design color nearby (an anti-aliased edge that is 50 % stroke + 50 % background comes out as
+    the stroke color at 50 % alpha, not as an opaque pale pixel); isolated faint marks ramp over
+    `soft` above the background's noise ceiling. Color is un-premultiplied against the
+    background, so printing on a shirt of the background color reproduces the original exactly.
     Design areas painted in the background color become transparent too (the shirt shows)."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
     rgb = np.asarray(img.convert("RGB")).astype(np.float32)
     bg = np.array(bg_color(img), dtype=np.float32)
     dist = np.linalg.norm(rgb - bg, axis=2)
     lo = float(np.percentile(np.linalg.norm(_border_ring(rgb) - bg, axis=1), 99)) + 6.0
     alpha = np.clip((dist - lo) / soft, 0.0, 1.0)
+    # Anti-aliased rim: pixels touching the background are blends of a nearby design color with
+    # the background, so their alpha is relative to the strongest color around them. Only there:
+    # between two design colors (hot pink beside black) the same rule would be wrong, and it is
+    # rejected anyway when the recovered color falls outside the gamut.
+    k = max(2, round(min(dist.shape) * 0.002))
+    near_bg = ndimage.binary_dilation(dist <= lo, iterations=k)
+    win = max(7, round(min(dist.shape) * 0.006) | 1)
+    ref = np.maximum(ndimage.maximum_filter(dist, size=win), lo + soft)
+    rim_alpha = np.clip((dist - lo) / (ref - lo), 0.0, 1.0)
+    safe_rim = np.where(rim_alpha > 0, rim_alpha, 1.0)[:, :, None]
+    rim_color = (rgb - (1.0 - rim_alpha[:, :, None]) * bg) / safe_rim
+    in_gamut = ((rim_color > -8.0) & (rim_color < 263.0)).all(axis=2)
+    alpha = np.where(near_bg & in_gamut, rim_alpha, alpha)
     safe = np.where(alpha > 0, alpha, 1.0)[:, :, None]
     color = np.clip((rgb - (1.0 - alpha[:, :, None]) * bg) / safe, 0, 255)
     out = np.dstack([color, alpha * 255.0]).round().astype(np.uint8)
@@ -429,10 +480,22 @@ def detect_style(cut: Image.Image) -> str:
     local_dev = np.abs(a - mean).sum(axis=2)
     edge = _edge_mask(np.asarray(Image.fromarray(rgba[:, :, :3]).filter(ImageFilter.MedianFilter(5))), threshold=40)
     body = (rgba[:, :, 3] >= 128) & ~edge
+    if _palette_size(rgba) <= 8:  # line art / 2-3 color logos: all edge, no body, still flat
+        return "flat"
     if body.sum() < 100:
         return "detail"
     flat_fraction = float((local_dev[body] < 12).mean())
     return "flat" if flat_fraction > 0.75 else "detail"
+
+
+def _palette_size(rgba: np.ndarray, cover: float = 0.95) -> int:
+    """Number of coarse color bins (8 levels per channel) covering `cover` of the opaque pixels."""
+    op = rgba[:, :, 3] >= 200
+    if not op.any():
+        return 0
+    rgb = (rgba[:, :, :3][op] >> 5).astype(np.int32)
+    counts = np.sort(np.bincount((rgb[:, 0] << 6) | (rgb[:, 1] << 3) | rgb[:, 2], minlength=512))[::-1]
+    return int(np.searchsorted(np.cumsum(counts) / counts.sum(), cover) + 1)
 
 
 # ---------------------------------------------------------------- background
@@ -447,6 +510,55 @@ def remove_bg(img: Image.Image) -> Image.Image:
         print(f"  Nạp model {REMBG_MODEL} (lần đầu sẽ tải ~900 MB về ~/.rembg/models/)...")
         _SESSION = rembg.new_session(REMBG_MODEL)
     return rembg.remove(img.convert("RGBA"), session=_SESSION, alpha_matting=False).convert("RGBA")
+
+
+def refine_edge(no_bg: Image.Image, original: Image.Image, band: float = 0.05) -> Image.Image:
+    """Photoshop-style Refine Edge for the model cutout on a solid colored background.
+
+    The model's mask is trusted deep inside (core: mask shrunk by r from its outer silhouette
+    only, so holes the model left open are not widened) and ignored far outside (beyond the mask
+    grown by r). In the band between, and inside holes, each pixel decides by color distance
+    from the background (key_color), which removes the background blob the model kept and
+    brings back thin details (lightning, splatter) it dropped. r = band * short side."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    alpha = np.asarray(no_bg.convert("RGBA"))[:, :, 3]
+    r = max(1, round(min(alpha.shape) * band))
+    mask = alpha >= 128
+    silhouette = ndimage.binary_fill_holes(mask)
+    core = _erode(np.pad(silhouette, r, constant_values=False), r)[r:-r, r:-r] & mask
+    halo = _dilate(mask, r)
+    # Feather the core inward over r/2 so trusted interior fades into the keyed band
+    # instead of meeting it at a hard seam: w = 0 at and outside the core edge, 1 deeper in.
+    blurred = np.asarray(Image.fromarray((core * 255).astype(np.uint8), "L").filter(ImageFilter.GaussianBlur(r / 2)))
+    w = np.where(core, np.clip(2.0 * blurred / 255.0 - 1.0, 0.0, 1.0), 0.0)  # never leaks across narrow gaps
+    keyed = np.asarray(key_color(original.convert("RGB")))
+    out = np.zeros_like(keyed)
+    out[halo] = keyed[halo]
+    orig = np.asarray(original.convert("RGBA"))
+    core_alpha = (w * 255.0).round().astype(np.uint8)
+    use_core = core_alpha >= out[:, :, 3]
+    out[use_core, :3] = orig[use_core, :3]
+    out[use_core, 3] = core_alpha[use_core]
+    return Image.fromarray(out, "RGBA")
+
+
+def decontaminate(cut: Image.Image, bg: tuple[int, int, int], rim_max: int = 200) -> Image.Image:
+    """Photoshop's Decontaminate Colors: the model cutout keeps the original RGB, so every
+    soft-edge pixel is still a blend with the background. Solve for the design color
+    (rgb - (1 - a) * bg) / a and keep alpha as is, so the fringe stops printing background.
+    Only the rim (alpha <= rim_max) is touched: the model gives interior pixels alpha ~250,
+    which is uncertainty, not blending, and tighten_alpha makes them opaque anyway."""
+    rgba = np.asarray(cut.convert("RGBA")).astype(np.float32)
+    alpha = rgba[:, :, 3]
+    a = alpha[:, :, None] / 255.0
+    bgc = np.array(bg, dtype=np.float32)
+    safe = np.where(a > 0, a, 1.0)
+    color = np.clip((rgba[:, :, :3] - (1.0 - a) * bgc) / safe, 0, 255)
+    rim = (alpha > 0) & (alpha <= rim_max)
+    out = rgba.copy()
+    out[rim, :3] = color[rim]
+    return Image.fromarray(out.round().astype(np.uint8), "RGBA")
 
 
 def fill_holes(cut: Image.Image, original: Image.Image) -> Image.Image:
@@ -509,12 +621,17 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     original = original.convert("RGBA")
     WORK_DIR.mkdir(parents=True, exist_ok=True)
 
-    bg = detect_bg(original) if args.bg == "auto" else args.bg
+    kind = detect_bg(original)
+    bg, refine = choose_mode(args, kind)
     if bg == "none":
         cut = crop_to_content(original)
         shirt = None
     elif bg == "ai":
         no_bg = remove_bg(original)
+        if refine:
+            no_bg = refine_edge(no_bg, original)  # band pixels come out already decontaminated
+        elif kind != "none":
+            no_bg = decontaminate(no_bg, bg_color(original))
         if args.fill_holes:
             no_bg = fill_holes(no_bg, original)
         cut = crop_to_content(no_bg)
@@ -527,7 +644,10 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     style = detect_style(cut) if args.style == "auto" else args.style
     colors = args.colors if args.colors is not None else (12 if args.vector else 0)
     model = "realesrgan-x4plus-anime" if style == "flat" else "realesrgan-x4plus"
-    print(f"  nền: {bg} | kiểu: {style} | {'vector' if args.vector else 'raster'}"
+    how = {"none": "đã trong suốt", "ai": "cắt hình" + (" + tinh chỉnh viền" if refine else ""),
+           "black": "key nền đen", "white": "key nền trắng", "color": "key màu nền"}[bg]
+    shirt_txt = "" if bg == "none" else f" | áo: {SHIRT_LABEL['same' if bg != 'ai' else 'other']}"
+    print(f"  nền: {kind}{shirt_txt} | cách: {how} | kiểu: {style} | {'vector' if args.vector else 'raster'}"
           f"{f', gom {colors} màu' if colors else ', giữ nguyên màu'}")
 
     if args.vector:
@@ -570,24 +690,31 @@ def _move(src: Path, sub: str) -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="AI flat illustration -> print-ready transparent PNG (300 DPI).")
-    p.add_argument("--bg", choices=["auto", "black", "white", "color", "ai", "none"], default="auto",
-                   help="nền của ảnh gốc: black/white = chuyển độ sáng thành trong suốt (in áo tối/sáng), color = key theo màu nền trơn (in áo cùng màu nền), ai = tách nền bằng model, none = ảnh đã trong suốt. auto = tự nhận diện (không bao giờ chọn color)")
-    p.add_argument("--vector", action="store_true",
-                   help="minh họa phẳng: gom màu rồi trace vector (mảng màu tuyệt đối phẳng, viền cong mượt). Mặc định là raster: upscale AI, giữ nguyên màu")
+    parser = p = argparse.ArgumentParser(
+        description="Ảnh thiết kế AI -> file in PNG nền trong suốt, 300 DPI. Thả ảnh vào input/ rồi chạy.",
+        epilog="Ví dụ: ./run.sh | ./run.sh --shirt same | ./run.sh --shirt other --size 30x40")
+    daily = p.add_argument_group("hằng ngày")
+    daily.add_argument("--shirt", choices=["auto", "same", "other"], default="auto",
+                       help="in lên áo màu gì so với nền ảnh: same = áo cùng màu nền (nền thành trong suốt, glow tan vào áo), "
+                            "other = áo khác màu (cắt hình thật; nền màu được tinh chỉnh viền). "
+                            "auto = nền đen coi là áo đen, còn lại coi là áo khác màu")
+    daily.add_argument("--size", default=DEFAULT_SIZE,
+                       help=f"kích thước file in, dạng WxH: pixel (vd 4500x5100) hoặc cm nếu số nhỏ hơn 200 (vd 30x40). Mặc định {DEFAULT_SIZE}")
+    daily.add_argument("--vector", action="store_true",
+                       help="minh họa phẳng: gom màu rồi trace vector (mảng màu tuyệt đối phẳng, viền cong mượt). Mặc định là raster: upscale AI, giữ nguyên màu")
+    daily.add_argument("files", nargs="*", help="chỉ xử lý các file này thay cho cả input/")
+    p = p.add_argument_group("nâng cao (thường không cần)")
+    p.add_argument("--bg", choices=["auto", "black", "white", "color", "ai", "none"], default="auto", help=argparse.SUPPRESS)
     p.add_argument("--style", choices=["auto", "flat", "detail"], default="auto",
                    help="chọn model upscale: flat = tranh phẳng, detail = tranh có gradient/texture. auto = tự nhận diện")
     p.add_argument("--colors", type=int, default=None,
                    help="gom về tối đa N màu. Mặc định: 12 khi --vector, không gom khi raster. 0 = không gom")
     p.add_argument("--merge", type=float, default=MERGE_DELTA_E,
                    help=f"ngưỡng gộp màu gần nhau (CIELAB ΔE, mặc định {MERGE_DELTA_E:g}). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác nhau bị gộp")
-    p.add_argument("--size", default=DEFAULT_SIZE,
-                   help=f"kích thước file in, dạng WxH: pixel (vd 4500x5100) hoặc cm nếu số nhỏ hơn 200 (vd 30x40). Mặc định {DEFAULT_SIZE}")
     p.add_argument("--fill-holes", action="store_true",
                    help="lấp các vùng trong suốt bị bao kín (chấm sáng, răng bị khoét). Không dùng nếu thiết kế có lỗ xuyên cố ý")
     p.add_argument("--keep-input", action="store_true", help="không chuyển ảnh gốc sang input/done/")
-    p.add_argument("files", nargs="*", help="chỉ xử lý các file này thay cho cả input/")
-    return p.parse_args(argv)
+    return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:

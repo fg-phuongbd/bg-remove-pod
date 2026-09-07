@@ -48,3 +48,38 @@ def test_parse_args_fill_holes():
 
 def test_parse_args_bg_color():
     assert pipeline.parse_args(["--bg", "color"]).bg == "color"
+
+
+def test_parse_args_shirt():
+    assert pipeline.parse_args([]).shirt == "auto"
+    assert pipeline.parse_args(["--shirt", "same"]).shirt == "same"
+    assert pipeline.parse_args(["--shirt", "other"]).shirt == "other"
+    with pytest.raises(SystemExit):
+        pipeline.parse_args(["--refine"])  # folded into --shirt / auto detection
+
+
+def test_bg_override_beats_shirt():
+    # --bg is the hidden escape hatch: when given, it wins over --shirt
+    assert pipeline.parse_args(["--bg", "color"]).bg == "color"
+    assert pipeline.choose_mode(pipeline.parse_args(["--bg", "ai", "--shirt", "same"]), "color") == ("ai", True)
+    assert pipeline.choose_mode(pipeline.parse_args(["--shirt", "same"]), "color") == ("color", False)
+    assert pipeline.choose_mode(pipeline.parse_args([]), "black") == ("black", False)
+
+
+@pytest.mark.skipif(shutil.which("resvg") is None, reason="resvg not installed")
+def test_main_keyed_black_art_makes_review_on_shirt(tmp_path, monkeypatch):
+    for name in ("INPUT_DIR", "OUTPUT_DIR", "REVIEW_DIR", "WORK_DIR"):
+        d = tmp_path / name.lower()
+        d.mkdir()
+        monkeypatch.setattr(pipeline, name, d)
+    monkeypatch.setattr(pipeline, "check_tools", lambda: None)
+    monkeypatch.setattr(pipeline, "upscale", lambda img, scale=4, model="": img.resize((img.width * scale, img.height * scale)))
+    art = Image.new("RGB", (200, 200), (10, 10, 12))
+    art.paste((240, 40, 40), (50, 50, 150, 150))
+    art.save(pipeline.INPUT_DIR / "dark.png")
+
+    assert pipeline.main(["--size", "400x400"]) == 0  # auto: black bg -> keyed for a dark shirt
+
+    assert (pipeline.OUTPUT_DIR / "dark.png").exists()
+    review = Image.open(pipeline.REVIEW_DIR / "dark.png").convert("RGB")
+    assert review.getpixel((review.width - 3, 3)) == (20, 20, 22)  # result shown on the dark shirt color
