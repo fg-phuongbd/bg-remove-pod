@@ -39,9 +39,14 @@ cp examples/mascot.jpg input/ && ./run.sh --vector --fill-holes
 ## Một câu hỏi duy nhất: in lên áo màu gì?
 
 Pipeline nhìn **nền** của ảnh gốc (vành 2 % quanh ảnh: đen, trắng, màu trơn, hay đã trong suốt) và
-hỏi một điều: áo in **cùng màu nền** hay **khác màu nền**. Cờ `--shirt` trả lời câu đó, mặc định `auto`.
+hỏi một điều: áo in **cùng màu nền** hay **khác màu nền**. Cờ `--shirt` trả lời câu đó.
 
-| Nền ảnh gốc | `--shirt same` (áo cùng màu nền) | `--shirt other` (áo khác màu) | `auto` chọn |
+**Mặc định là `same`: sinh ảnh AI trên nền đúng màu áo sẽ in** (áo đen thì nền đen, áo hồng thì nền
+hồng). Khi đó nền được tách bằng công thức, chính xác từng pixel, không cần model và không có vụn.
+Chỉ dùng `--shirt other` khi buộc phải in một thiết kế lên áo khác màu nền gốc; đường này dùng model
+và có thể để lại vụn nhỏ ở viền.
+
+| Nền ảnh gốc | `--shirt same` (mặc định, áo cùng màu nền) | `--shirt other` (áo khác màu) | `--shirt auto` chọn |
 |---|---|---|---|
 | **đen** | Key nền đen: pixel đen thành trong suốt để áo hiện ra, màu được bù để in lên áo đen ra đúng ảnh gốc. Glow, airbrush giữ nguyên. | Cắt hình bằng BiRefNet, viền mềm được khử màu nền dính (Decontaminate Colors) | `same` (tranh nền đen là cho áo tối) |
 | **trắng** | Key nền trắng, cho thiết kế có glow trắng in áo trắng | Cắt hình bằng BiRefNet **+ tinh chỉnh viền** (như nền màu). Chi tiết trắng nhỏ bên trong mà model khoét nhầm được lấp lại; vùng trắng lớn bên trong nét viền vẫn trong suốt. | `other` |
@@ -61,7 +66,7 @@ Hằng ngày chỉ cần ba cờ:
 
 | Cờ | Mặc định | Khi nào dùng |
 |---|---|---|
-| `--shirt X` | auto | `same` = áo cùng màu nền ảnh, `other` = áo khác màu. Xem bảng trên. |
+| `--shirt X` | same | `same` = áo cùng màu nền ảnh, `other` = áo khác màu, `auto` = nền đen coi là áo đen, còn lại áo khác màu. Xem bảng trên. |
 | `--size WxH` | 4500x5100 | Kích thước file in. Số ≥ 200 là pixel, nhỏ hơn là cm (`30x40`). |
 | `--vector` | tắt | Minh họa phẳng: gom 12 màu rồi trace vector. Không dùng cho tranh có gradient, texture, chữ rất nhỏ. |
 | `file1 file2 …` | | Chỉ xử lý các file này. |
@@ -80,9 +85,9 @@ Nâng cao, thường không cần:
 Ví dụ:
 
 ```bash
-./run.sh                                   # thả gì cũng chạy: nền đen in áo đen, còn lại in áo khác màu
-./run.sh --shirt same                      # nền hồng in áo hồng, nền trắng in áo trắng
-./run.sh --shirt other input/done/abc.png  # ảnh nền đen nhưng muốn in lên áo trắng
+./run.sh                                   # áo cùng màu nền ảnh: nền đen in áo đen, nền hồng in áo hồng
+./run.sh --shirt other                     # áo khác màu nền: cắt hình bằng model
+./run.sh --shirt other input/done/abc.png  # chạy lại một ảnh nền đen để in lên áo trắng
 ./run.sh --vector --fill-holes             # minh họa phẳng nền trắng, có chấm sáng trắng
 ./run.sh --size 30x40                      # khổ 30 x 40 cm
 ```

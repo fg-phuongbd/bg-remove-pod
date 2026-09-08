@@ -377,8 +377,9 @@ def resolve_bg(kind: str, shirt: str) -> tuple[str, bool]:
 
     shirt 'same' = shirt is the background color -> key it (alpha from color, glows fade into
     the shirt). shirt 'other' -> real cutout (rembg), plus edge refinement on white and colored
-    solid backgrounds, where the model leaves background slivers along the edges. 'auto': black art is for dark
-    shirts (key), everything else is cut out, as the batch default has always been."""
+    solid backgrounds, where the model leaves background slivers along the edges. 'auto': black
+    art is for dark shirts (key), everything else is cut out. The CLI default is 'same': render
+    the AI image on the shirt color and the exact key path handles it without a model."""
     if kind == "none":
         return "none", False
     if shirt == "auto":
@@ -692,11 +693,11 @@ def _move(src: Path, sub: str) -> None:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = p = argparse.ArgumentParser(
         description="Ảnh thiết kế AI -> file in PNG nền trong suốt, 300 DPI. Thả ảnh vào input/ rồi chạy.",
-        epilog="Ví dụ: ./run.sh | ./run.sh --shirt same | ./run.sh --shirt other --size 30x40")
+        epilog="Ví dụ: ./run.sh (áo cùng màu nền ảnh) | ./run.sh --shirt other (áo khác màu) | ./run.sh --size 30x40")
     daily = p.add_argument_group("hằng ngày")
-    daily.add_argument("--shirt", choices=["auto", "same", "other"], default="auto",
-                       help="in lên áo màu gì so với nền ảnh: same = áo cùng màu nền (nền thành trong suốt, glow tan vào áo), "
-                            "other = áo khác màu (cắt hình thật; nền màu được tinh chỉnh viền). "
+    daily.add_argument("--shirt", choices=["same", "other", "auto"], default="same",
+                       help="in lên áo màu gì so với nền ảnh. same (mặc định) = áo cùng màu nền: nền thành trong suốt bằng công thức, "
+                            "chính xác từng pixel, không cần model. other = áo khác màu: cắt hình bằng model, nền trắng/màu được tinh chỉnh viền. "
                             "auto = nền đen coi là áo đen, còn lại coi là áo khác màu")
     daily.add_argument("--size", default=DEFAULT_SIZE,
                        help=f"kích thước file in, dạng WxH: pixel (vd 4500x5100) hoặc cm nếu số nhỏ hơn 200 (vd 30x40). Mặc định {DEFAULT_SIZE}")

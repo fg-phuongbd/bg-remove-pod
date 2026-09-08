@@ -51,7 +51,8 @@ def test_parse_args_bg_color():
 
 
 def test_parse_args_shirt():
-    assert pipeline.parse_args([]).shirt == "auto"
+    assert pipeline.parse_args([]).shirt == "same"   # default: the shirt is the background color
+    assert pipeline.parse_args(["--shirt", "auto"]).shirt == "auto"
     assert pipeline.parse_args(["--shirt", "same"]).shirt == "same"
     assert pipeline.parse_args(["--shirt", "other"]).shirt == "other"
     with pytest.raises(SystemExit):
@@ -64,6 +65,9 @@ def test_bg_override_beats_shirt():
     assert pipeline.choose_mode(pipeline.parse_args(["--bg", "ai", "--shirt", "same"]), "color") == ("ai", True)
     assert pipeline.choose_mode(pipeline.parse_args(["--shirt", "same"]), "color") == ("color", False)
     assert pipeline.choose_mode(pipeline.parse_args([]), "black") == ("black", False)
+    assert pipeline.choose_mode(pipeline.parse_args([]), "white") == ("white", False)   # default same: key, no model
+    assert pipeline.choose_mode(pipeline.parse_args([]), "color") == ("color", False)
+    assert pipeline.choose_mode(pipeline.parse_args(["--shirt", "auto"]), "white") == ("ai", True)
 
 
 @pytest.mark.skipif(shutil.which("resvg") is None, reason="resvg not installed")
