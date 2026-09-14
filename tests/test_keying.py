@@ -170,3 +170,92 @@ def test_key_color_multicolor_design_keeps_saturated_pixels_opaque():
     comp = np.asarray(out).astype(float); a = comp[:, :, 3:] / 255
     back = comp[:, :, :3] * a + np.array(bg) * (1 - a)
     assert np.abs(back - np.asarray(im)).max() < 4
+
+
+def _pink_character():
+    """Light pink bg; a character = black outline ring whose inside is painted in the bg pink
+    (skin) with a slightly-off-pink patch (cheek), plus a pink glow outside the outline."""
+    bg = (253, 190, 213)
+    im = Image.new("RGB", (300, 300), bg)
+    d = ImageDraw.Draw(im)
+    d.ellipse((60, 60, 240, 240), fill=(0, 0, 0))        # outline ring...
+    d.ellipse((80, 80, 220, 220), fill=bg)               # ...whose inside is the bg color
+    d.rectangle((130, 130, 170, 170), fill=(253, 160, 200))  # cheek: near bg -> partial alpha when keyed
+    d.rectangle((0, 250, 300, 300), fill=(254, 205, 222))    # faint glow strip touching the border
+    return im
+
+
+def test_solid_core_keeps_silhouette_opaque_keys_the_rest():
+    im = _pink_character()
+    keyed = pipeline.key_bg(im, "color")
+    assert keyed.getpixel((150, 100))[3] == 0            # plain key: skin punched through
+    assert 0 < keyed.getpixel((150, 150))[3] < 255       # cheek half keyed
+    silhouette = Image.new("L", im.size, 0)
+    ImageDraw.Draw(silhouette).ellipse((58, 58, 242, 242), fill=255)  # model mask, 2 px too generous
+    out = pipeline.solid_core(keyed, im, silhouette, pipeline.bg_rgb(im, "color"))
+    assert out.getpixel((150, 100)) == (253, 190, 213, 255)  # skin back, original color, opaque
+    assert out.getpixel((150, 150)) == (253, 160, 200, 255)  # cheek fully opaque, original color
+    assert out.getpixel((150, 70)) == (0, 0, 0, 255)         # outline untouched
+    assert out.getpixel((10, 10))[3] == 0                    # outside bg still transparent
+    assert out.getpixel((150, 275))[3] == keyed.getpixel((150, 275))[3]  # glow outside silhouette stays keyed
+    assert out.getpixel((150, 59))[3] == 0                   # bg the model over-included is not kept
+
+
+def test_solid_core_leaves_the_frame_block_to_the_key():
+    """Figure cut off by the frame: the model's mask runs to the bottom border although the
+    picture has already faded out there. That block must not become solid."""
+    bg = (0, 0, 0)
+    im = Image.new("RGB", (300, 300), bg)
+    d = ImageDraw.Draw(im)
+    d.rectangle((100, 40, 200, 200), fill=(30, 60, 220))        # jersey
+    d.rectangle((120, 100, 180, 120), fill=(4, 6, 12))          # deep fold shadow inside the jersey
+    for y in range(200, 240):                                  # hem fading into the background
+        v = int(220 * (240 - y) / 40)
+        d.line((100, y, 200, y), fill=(v // 7, v // 4, v))
+    keyed = pipeline.key_bg(im, "black")
+    silhouette = Image.new("L", im.size, 0)
+    ImageDraw.Draw(silhouette).rectangle((98, 38, 202, 299), fill=255)  # model: body all the way down
+    out = pipeline.solid_core(keyed, im, silhouette, pipeline.bg_rgb(im, "black"))
+    assert out.getpixel((150, 110)) == (4, 6, 12, 255)          # fold shadow: solid ink
+    assert out.getpixel((150, 280))[3] == 0                     # body the model invented below the picture: gone
+    assert out.getpixel((150, 232))[3] == 255                   # the hem itself, dim but present: solid ink
+    assert out.getpixel((150, 60)) == (30, 60, 220, 255)
+
+
+def test_solid_core_composites_back_to_the_original_on_the_shirt():
+    """Every pixel, figure and glow alike, must still reproduce the original on the shirt color."""
+    im = _pink_character()
+    keyed = pipeline.key_bg(im, "color")
+    silhouette = Image.new("L", im.size, 0)
+    ImageDraw.Draw(silhouette).ellipse((58, 58, 242, 242), fill=255)
+    out = pipeline.solid_core(keyed, im, silhouette, pipeline.bg_rgb(im, "color"))
+
+    def on_shirt(img):
+        x = np.asarray(img).astype(float)
+        a = x[:, :, 3:] / 255.0
+        return x[:, :, :3] * a + np.array([253, 190, 213]) * (1 - a)
+
+    src = np.asarray(im.convert("RGB")).astype(float)
+    # making the figure opaque must not change one printed pixel: no darker ring inside the
+    # edge, no brighter rim outside it. Whatever the plain key already gets wrong, no more.
+    assert np.abs(on_shirt(out) - src).max() <= np.abs(on_shirt(keyed) - src).max()
+
+
+def test_solid_core_ignores_a_hairline_of_mask_around_a_thin_detail():
+    """A model tracing a bright thin stroke leaves a filament of mask hugging it. Filling that
+    in turns the background caught inside the filament into solid dark ink."""
+    im = Image.new("RGB", (300, 300), (0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rectangle((40, 40, 160, 260), fill=(30, 60, 220))   # the figure
+    d.line((200, 40, 240, 260), fill=(255, 255, 255), width=5)  # a signature stroke
+    keyed = pipeline.key_bg(im, "black")
+    sil = Image.new("L", im.size, 0)
+    sd = ImageDraw.Draw(sil)
+    sd.rectangle((40, 40, 160, 260), fill=255)
+    sd.line((200, 40, 240, 260), fill=255, width=17)      # model traced the stroke: a filament
+    out = pipeline.solid_core(keyed, im, sil, pipeline.bg_rgb(im, "black"))
+    assert out.getpixel((100, 150)) == (30, 60, 220, 255)          # figure still filled in
+    assert out.getpixel((222, 150))[3] == 255                      # the stroke itself stays
+    a = np.asarray(out)
+    beside = a[150, 208:214]                                       # black gap inside the filament
+    assert beside[:, 3].max() < 40, f"nền trong sợi mask bị ép đặc: {beside}"

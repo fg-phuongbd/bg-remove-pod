@@ -410,6 +410,11 @@ def bg_color(img: Image.Image) -> tuple[int, int, int]:
     return tuple(int(v) for v in np.median(ring, axis=0).round())
 
 
+def _rim_px(shape: tuple[int, ...]) -> int:
+    """Width of the anti-aliasing rim between design and background, in px (0.2 % of the short side)."""
+    return max(2, round(min(shape[:2]) * 0.002))
+
+
 def key_color(img: Image.Image, soft: float = 60.0) -> Image.Image:
     """Turn a solid colored background (e.g. light pink) into transparency, for a shirt of that
     same color. A pixel's alpha is its RGB distance from the background relative to the strongest
@@ -429,7 +434,7 @@ def key_color(img: Image.Image, soft: float = 60.0) -> Image.Image:
     # the background, so their alpha is relative to the strongest color around them. Only there:
     # between two design colors (hot pink beside black) the same rule would be wrong, and it is
     # rejected anyway when the recovered color falls outside the gamut.
-    k = max(2, round(min(dist.shape) * 0.002))
+    k = _rim_px(dist.shape)
     near_bg = ndimage.binary_dilation(dist <= lo, iterations=k)
     win = max(7, round(min(dist.shape) * 0.006) | 1)
     ref = np.maximum(ndimage.maximum_filter(dist, size=win), lo + soft)
@@ -442,6 +447,11 @@ def key_color(img: Image.Image, soft: float = 60.0) -> Image.Image:
     color = np.clip((rgb - (1.0 - alpha[:, :, None]) * bg) / safe, 0, 255)
     out = np.dstack([color, alpha * 255.0]).round().astype(np.uint8)
     return Image.fromarray(out, "RGBA")
+
+
+def bg_rgb(img: Image.Image, bg: str) -> tuple[int, int, int]:
+    """The color key_bg solves against, i.e. the shirt color the result is meant to be printed on."""
+    return {"black": (0, 0, 0), "white": (255, 255, 255)}.get(bg) or bg_color(img)
 
 
 def key_bg(img: Image.Image, bg: str) -> Image.Image:
@@ -468,6 +478,59 @@ def key_bg(img: Image.Image, bg: str) -> Image.Image:
         color = 255.0 - color
     out = np.dstack([color, alpha * 255.0]).round().astype(np.uint8)
     return Image.fromarray(out, "RGBA")
+
+
+def solid_core(keyed: Image.Image, original: Image.Image, silhouette: Image.Image,
+               bg: tuple[int, int, int], band: float = 0.001, thin: float = 0.006) -> Image.Image:
+    """--fill-holes on the key path: cover the figure solidly, keep the key everywhere else.
+
+    Keying alone punches through design areas painted in (or shaded down to) the background
+    color: a dark jersey's folds on black, skin on a same-colored pink. Those are ink, not
+    shirt. It also leaves whatever it does keep semi-transparent in proportion to brightness,
+    so even a solid sleeve ends up a little see-through. `silhouette` is the segmentation
+    model's alpha for the same picture, which is coverage rather than brightness: taken as the
+    floor for alpha, it makes the figure opaque right out to its own soft edge.
+
+    Two things inside the silhouette are not covered, both of them background the key already
+    dropped completely (at or below its noise ceiling, so bare shirt rather than dark ink).
+    The first is the rim: background just outside the silhouette, grown by r = band * short
+    side, which keeps the anti-aliased edge on its own soft alpha and swallows any sliver the
+    mask over-reaches into. The second is a block open to the frame border from inside the
+    silhouette -- where a cut-off picture has already faded out and the model carried the body
+    on to the edge of the frame anyway. Everything else the model calls figure is covered, an
+    arm dissolved into the dark or a patch of skin on its own color included: connecting to
+    the outside background does not make it background, since on a same-colored shirt a deep
+    shadow and the shirt are the same pixels.
+
+    The silhouette is also opened by thin * short side first. A segmentation model tracing a
+    bright thin detail -- a signature stroke, a stray hair -- leaves a hairline of mask around
+    it, and filling that in would print the background caught inside the hairline as solid dark
+    ink. Only mask that survives as an area is taken as a figure to cover; a filament is left
+    to the key, which renders the detail correctly anyway.
+
+    Color is re-solved from the original at the final alpha, so every pixel still composites to
+    the original exactly on a shirt of the background color -- figure, rim and outside glow
+    alike. Only the split between alpha and color changes, never the printed result.
+    """
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    a_key = np.asarray(keyed.convert("RGBA"))[:, :, 3].astype(np.float32)
+    r = max(2, round(min(a_key.shape) * band))
+    sil = np.asarray(silhouette.convert("L"))
+    k = 2 * max(1, round(min(sil.shape) * thin)) + 1  # opening at the silhouette's own resolution
+    kw = dict(size=k, mode="nearest")
+    solid = ndimage.maximum_filter(ndimage.minimum_filter((sil >= 128).astype(np.uint8), **kw), **kw)
+    cover = np.asarray(Image.fromarray(sil * solid, "L").resize(keyed.size, Image.Resampling.BILINEAR)).astype(np.float32)
+    gone = a_key == 0  # the key found nothing here at all: shirt, not ink
+    rim = _dilate(gone & (cover < 128), r)  # background outside the figure, plus its soft edge
+    labels, _ = ndimage.label(gone & ~rim)
+    ids = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
+    frame_block = np.isin(labels, ids[ids > 0])  # body the model carried on past the picture
+    alpha = np.maximum(a_key, np.where(rim | frame_block, 0.0, cover))
+    a = (alpha / 255.0)[:, :, None]
+    orig = np.asarray(original.convert("RGB").resize(keyed.size)).astype(np.float32)
+    color = np.clip((orig - (1.0 - a) * np.array(bg, dtype=np.float32)) / np.where(a > 0, a, 1.0), 0, 255)
+    return Image.fromarray(np.dstack([color, alpha]).round().astype(np.uint8), "RGBA")
 
 
 def detect_style(cut: Image.Image) -> str:
@@ -638,7 +701,11 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         cut = crop_to_content(no_bg)
         shirt = None
     else:
-        cut = crop_to_content(key_bg(original, bg), min_alpha=40)
+        silhouette = remove_bg(original).getchannel("A") if args.fill_holes else None
+        keyed = key_bg(original, bg)
+        if silhouette:
+            keyed = solid_core(keyed, original, silhouette, bg_rgb(original, bg))
+        cut = crop_to_content(keyed, min_alpha=40)
         shirt = {"black": (20, 20, 22), "white": (245, 245, 245)}.get(bg) or bg_color(original)
     cut.save(WORK_DIR / f"{src.stem}-cut.png")
 
@@ -647,6 +714,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     model = "realesrgan-x4plus-anime" if style == "flat" else "realesrgan-x4plus"
     how = {"none": "đã trong suốt", "ai": "cắt hình" + (" + tinh chỉnh viền" if refine else ""),
            "black": "key nền đen", "white": "key nền trắng", "color": "key màu nền"}[bg]
+    how += (" + thân hình đặc" if bg not in ("ai", "none") else " + lấp lỗ") if args.fill_holes and bg != "none" else ""
     shirt_txt = "" if bg == "none" else f" | áo: {SHIRT_LABEL['same' if bg != 'ai' else 'other']}"
     print(f"  nền: {kind}{shirt_txt} | cách: {how} | kiểu: {style} | {'vector' if args.vector else 'raster'}"
           f"{f', gom {colors} màu' if colors else ', giữ nguyên màu'}")
@@ -666,7 +734,10 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         # keyed background: upscale the flat RGB first (cleaner edges, denoised background),
         # key at full resolution, then crop
         big_rgb = upscale(original.convert("RGB"), model=model)
-        keyed = crop_to_content(key_bg(big_rgb, bg), min_alpha=40)
+        keyed = key_bg(big_rgb, bg)
+        if silhouette:
+            keyed = solid_core(keyed, big_rgb, silhouette, bg_rgb(big_rgb, bg))
+        keyed = crop_to_content(keyed, min_alpha=40)
         result = keyed.resize(fit_box(*keyed.size, box), Image.Resampling.LANCZOS)
         if colors:
             result = flatten_raster(result, colors, args.merge)
@@ -713,7 +784,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--merge", type=float, default=MERGE_DELTA_E,
                    help=f"ngưỡng gộp màu gần nhau (CIELAB ΔE, mặc định {MERGE_DELTA_E:g}). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác nhau bị gộp")
     p.add_argument("--fill-holes", action="store_true",
-                   help="lấp các vùng trong suốt bị bao kín (chấm sáng, răng bị khoét). Không dùng nếu thiết kế có lỗ xuyên cố ý")
+                   help="không đục lỗ trong hình. Cắt hình: lấp vùng trong suốt bị bao kín (chấm sáng, răng bị model khoét). "
+                        "Key (--shirt same): thân hình theo model cắt hình được giữ đặc (bóng áo tối, da trùng màu nền), ngoài thân hình vẫn key. "
+                        "Không dùng nếu thiết kế có lỗ xuyên cố ý")
     p.add_argument("--keep-input", action="store_true", help="không chuyển ảnh gốc sang input/done/")
     return parser.parse_args(argv)
 

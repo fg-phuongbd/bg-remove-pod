@@ -78,7 +78,7 @@ Nâng cao, thường không cần:
 | `--style X` | auto | Ép model upscale: `flat` hoặc `detail`. |
 | `--colors N` | không gom | Gom về N màu (raster) hoặc đổi số màu khi `--vector` (mặc định 12). |
 | `--merge D` | 12 | Ngưỡng gộp hai màu gần nhau khi gom (CIELAB ΔE). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác bị gộp. |
-| `--fill-holes` | tắt | Khi cắt hình: lấp chi tiết trắng bên trong hình bị model khoét mất (mắt, răng). Không dùng nếu có lỗ chữ cố ý. |
+| `--fill-holes` | tắt | Không đục lỗ trong hình. Cắt hình: lấp chi tiết trắng bị model khoét (mắt, răng). Key `--shirt same`: thân hình nhân vật theo model cắt hình được giữ đặc (bóng áo tối trên nền đen, da trùng màu nền), ngoài thân hình vẫn key nên chữ ký, glow giữ nguyên. Không dùng nếu có lỗ chữ cố ý. |
 | `--keep-input` | tắt | Không chuyển ảnh gốc khỏi `input/`. |
 | `--bg X` | auto | Cờ ẩn, ép thẳng cách xử lý khi nhận diện nền sai: `black`, `white`, `color`, `ai`, `none`. Thắng `--shirt`. |
 
@@ -88,9 +88,33 @@ Ví dụ:
 ./run.sh                                   # áo cùng màu nền ảnh: nền đen in áo đen, nền hồng in áo hồng
 ./run.sh --shirt other                     # áo khác màu nền: cắt hình bằng model
 ./run.sh --shirt other input/done/abc.png  # chạy lại một ảnh nền đen để in lên áo trắng
+./run.sh --fill-holes                      # ảnh có nhân vật: giữ thân hình đặc, không đục lỗ
 ./run.sh --vector --fill-holes             # minh họa phẳng nền trắng, có chấm sáng trắng
 ./run.sh --size 30x40                      # khổ 30 x 40 cm
 ```
+
+## Nhân vật trên nền cùng màu áo: `--fill-holes`
+
+Key nền cho alpha theo độ sáng, nên vùng thiết kế trùng hoặc gần màu nền sẽ thành trong suốt: da
+người trên nền hồng, nếp áo tối trên nền đen. In lên áo đúng màu thì vẫn ra đúng ảnh gốc, nhưng file
+nhìn như bị đục lỗ và chỗ đó in rất mỏng.
+
+`--fill-holes` chạy thêm model cắt hình để lấy **thân hình**, rồi lấy alpha của model làm sàn: trong
+thân hình mọi pixel đặc, kể cả bóng tối và da; ngoài thân hình vẫn key nguyên vẹn nên chữ ký, tia
+sáng, glow không đổi. Màu được giải lại theo alpha mới, nên in lên áo đúng màu vẫn ra đúng ảnh gốc.
+
+Chỉ hai thứ trong thân hình không được tô đặc, cả hai đều là nền mà key đã bỏ hẳn. Một là **viền**:
+nền ngay ngoài thân hình, nới thêm 0,1% cạnh ngắn, giữ cho mép răng cưa dùng alpha mềm của chính nó
+và nuốt luôn phần mask model lẹm ra ngoài. Hai là **khối thông ra mép khung**, tức chỗ ảnh đã mờ hết
+vào nền mà model vẫn kéo thân người tới sát mép. Ngoài hai thứ đó, mọi chỗ model nhận là người đều
+được tô đặc, kể cả cánh tay chìm hẳn vào bóng tối: nối liền với nền bên ngoài không có nghĩa là nền,
+vì trên áo cùng màu thì bóng tối và áo vốn là cùng một pixel.
+
+Sợi mask mảnh mà model vẽ bám theo nét sáng nhỏ (nét chữ ký, sợi tóc bay) bị loại trước bằng phép mở
+hình thái học, vì tô đặc sợi đó sẽ biến khoảng nền kẹt bên trong thành mực đen đục.
+
+Đổi lại: lần chạy đầu phải tải model cắt hình (~900 MB) và mỗi ảnh chậm thêm khoảng 20 giây. Không
+dùng cờ này nếu thiết kế có lỗ xuyên cố ý.
 
 ## Lưu ý về file in cho áo tối
 
