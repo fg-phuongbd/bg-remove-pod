@@ -52,6 +52,11 @@ thì nét trắng biến mất và trông như thủng trong khi không hề th�
 **Cờ nhớ theo từng ảnh.** Ảnh có người bật `thân hình đặc`, poster thì không, bản in nhỏ đặt vị trí
 riêng. Mỗi thẻ ảnh hiện cờ của nó, và trình duyệt nhớ lại khi bạn mở trang lần sau.
 
+**Kéo thả ảnh** vào bất cứ đâu trên trang để thêm vào `input/`. **Nút Tải file in** tải bản đầy đủ
+300 DPI. Ô **cùng lúc** đặt số ảnh chạy song song, mặc định 2: phần lớn thời gian một ảnh nằm ở tiến
+trình con Real-ESRGAN nên chạy vài ảnh một lúc rút ngắn đáng kể, nhưng mỗi ảnh giữ vài mảng cỡ
+5000 x 5000 trong bộ nhớ nên đừng đẩy quá cao.
+
 **Ba con số chấm chất lượng** hiện ngay dưới ảnh:
 
 | Số | Nghĩa |
@@ -105,6 +110,7 @@ Nâng cao, thường không cần:
 | `--style X` | auto | Ép model upscale: `flat` hoặc `detail`. |
 | `--colors N` | không gom | Gom về N màu (raster) hoặc đổi số màu khi `--vector` (mặc định 12). |
 | `--merge D` | 12 | Ngưỡng gộp hai màu gần nhau khi gom (CIELAB ΔE). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác bị gộp. |
+| `--fill-limit P` | 20 | Chốt chặn cho `--fill-holes`: nếu tô đặc làm tăng quá P phần trăm mực in đè lên áo cùng màu thì bỏ qua và cảnh báo. `100` = tắt. |
 | `--fill-holes` | tắt | Không đục lỗ trong hình. Cắt hình: lấp chi tiết trắng bị model khoét (mắt, răng). Key `--shirt same`: thân hình nhân vật theo model cắt hình được giữ đặc (bóng áo tối trên nền đen, da trùng màu nền), ngoài thân hình vẫn key nên chữ ký, glow giữ nguyên. Không dùng nếu có lỗ chữ cố ý. |
 | `--keep-input` | tắt | Không chuyển ảnh gốc khỏi `input/`. |
 | `--floor D` | 32 | Key màu nền: màu cách nền dưới ngưỡng này (khoảng cách RGB) cho trong suốt hẳn. Dập quầng xám mà máy in vẫn phủ lót trắng. `0` = tắt. |
@@ -143,6 +149,11 @@ hình thái học, vì tô đặc sợi đó sẽ biến khoảng nền kẹt b�
 
 Đổi lại: lần chạy đầu phải tải model cắt hình (~900 MB) và mỗi ảnh chậm thêm khoảng 20 giây. Không
 dùng cờ này nếu thiết kế có lỗ xuyên cố ý.
+
+**Chốt chặn tự động.** Với poster, model cắt hình coi cả tấm là một khối và lấp luôn nền giữa các
+chi tiết; mực đó in ra trùng màu áo, vừa phí vừa nổi thành mảng trên vải. Nên pipeline đo mức tăng
+của loại mực đó và bỏ qua việc tô đặc nếu vượt `--fill-limit`, mặc định 20%, kèm một dòng cảnh báo.
+Đo trên bộ ảnh thật: ảnh có người thật tăng 5 đến 11%, còn ba tấm poster tăng 27 đến 60%.
 
 ## Hai kiểu key, pipeline tự chọn
 
@@ -198,6 +209,17 @@ rộng hộp đó còn hình dọc dùng hết chiều cao.
 
 `--margin` là khoảng hở từ mép khung, mặc định 2% cạnh ngắn, chỉ có tác dụng khi `--place` khác
 `center`. Hình căn giữa thì không bao giờ chạm tới nó.
+
+## Tên file in
+
+```
+tên-ảnh_khung-in_vị-trí.png       ->  skull_4500x5100_center.png
+tên-ảnh_khung-in_vị-trí_cỡ.png    ->  skull_4500x5100_top-right_26pc.png
+```
+
+Cỡ chỉ xuất hiện khi khác 100%, để tên mặc định vẫn gọn. Nhờ mang theo khung và vị trí, chạy lại
+cùng một ảnh ở cỡ hoặc vị trí khác sẽ ra file riêng chứ không đè lên nhau. Ảnh so sánh trong
+`review/` dùng đúng tên đó.
 
 ## Lưu ý về file in cho áo tối
 

@@ -1,5 +1,7 @@
+import io
 import json
 import sys
+import urllib.parse
 import threading
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -54,8 +56,9 @@ def test_make_args_rejects_an_unknown_flag():
 def test_measure_reads_solidity_waste_and_fidelity(workspace):
     src = workspace / "input" / "a.png"
     _design(src)
-    out = workspace / "output" / "a.png"
     pipeline.process_one(src, ui.make_args({"size": "600x600"}))
+    out = workspace / "output" / "a_600x600_center.png"
+    assert out.exists()
     rep = ui.measure(out, src)
     assert rep["dac"] > 80                             # thiết kế phẳng: mực phải đặc
     assert rep["thua"] < 5                             # không in đè lên áo đen
@@ -74,10 +77,11 @@ def test_measure_on_an_empty_file_does_not_blow_up(workspace):
 def test_list_images_sees_both_folders_and_flags_finished_work(workspace):
     _design(workspace / "input" / "cho.png")
     _design(workspace / "input" / "done" / "xong.png")
-    Image.new("RGBA", (8, 8)).save(workspace / "output" / "xong.png")
+    Image.new("RGBA", (8, 8)).save(workspace / "output" / "xong_4500x5100_center.png")
     rows = {r["name"]: r for r in ui.list_images()}
     assert rows["cho.png"]["waiting"] is True and rows["cho.png"]["done"] is False
     assert rows["xong.png"]["waiting"] is False and rows["xong.png"]["done"] is True
+    assert rows["xong.png"]["out"] == "xong_4500x5100_center.png"
 
 
 def test_preview_is_cached_until_the_source_changes(workspace):
@@ -135,7 +139,7 @@ def test_server_runs_a_job_and_reports_on_it(server, workspace):
         __import__("time").sleep(0.1)
     st = json.loads(get(server, "/api/status")[1])
     assert st["done"] == ["a.png"], st["errors"]
-    assert (workspace / "output" / "a.png").exists()
+    assert (workspace / "output" / "a_400x400_center.png").exists()
     assert src.exists(), "trang phải giữ ảnh gốc tại chỗ để chạy lại được"
     rep = json.loads(get(server, "/api/report/a.png")[1])
     assert rep["dac"] > 80
@@ -149,3 +153,79 @@ def test_server_refuses_a_job_with_an_unknown_flag(server, workspace):
         urllib.request.urlopen(req)  # noqa: S310
     assert e.value.code == 400
     assert not ui.RUNNER.status()["running"]
+
+
+def test_outputs_for_lists_every_variant_newest_first(workspace):
+    out = workspace / "output"
+    for n in ("a_4500x5100_center.png", "a_4500x5100_top-right_26pc.png", "b_4500x5100_center.png"):
+        Image.new("RGBA", (4, 4)).save(out / n)
+    import os, time
+    os.utime(out / "a_4500x5100_top-right_26pc.png", (time.time() + 5, time.time() + 5))
+    names = [p.name for p in ui.outputs_for("a")]
+    assert names == ["a_4500x5100_top-right_26pc.png", "a_4500x5100_center.png"]
+    assert ui.outputs_for("khong-co") == []
+
+
+def test_safe_name_keeps_uploads_inside_input():
+    assert ui.safe_name("skull.png") == "skull.png"
+    assert ui.safe_name("/tmp/evil/../skull.PNG") == "skull.PNG"
+    assert ui.safe_name("C:\\Users\\a\\skull.jpg") == "skull.jpg"
+    for bad in ("../../etc/passwd", "note.txt", "", ".hidden.png", "skull.svg"):
+        with pytest.raises(ValueError):
+            ui.safe_name(bad)
+
+
+def test_server_accepts_a_dropped_image_and_refuses_junk(server, workspace):
+    import io
+    buf = io.BytesIO()
+    _design(workspace / "tmp.png").save(buf, "PNG")
+    req = urllib.request.Request(server + "/api/upload?name=" + urllib.parse.quote("moi.png"),
+                                 buf.getvalue(), {"Content-Type": "application/octet-stream"})
+    with urllib.request.urlopen(req) as r:  # noqa: S310
+        assert json.loads(r.read())["name"] == "moi.png"
+    assert (workspace / "input" / "moi.png").exists()
+    assert "moi.png" in [i["name"] for i in ui.list_images()]
+
+    bad = urllib.request.Request(server + "/api/upload?name=moi2.png", b"khong phai anh",
+                                 {"Content-Type": "application/octet-stream"})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(bad)  # noqa: S310
+    assert e.value.code == 400
+
+
+def test_server_serves_the_print_file_as_a_download(server, workspace):
+    src = workspace / "input" / "a.png"
+    _design(src)
+    pipeline.process_one(src, ui.make_args({"size": "300x300"}))
+    with urllib.request.urlopen(server + "/file/a.png") as r:  # noqa: S310
+        assert "a_300x300_center.png" in r.headers["Content-Disposition"]
+        assert Image.open(io.BytesIO(r.read())).size == (300, 300)
+
+
+def test_runner_runs_jobs_in_parallel(workspace, monkeypatch):
+    """Nhiều ảnh chạy cùng lúc, không phải lần lượt."""
+    import time
+    peak = [0]
+    lock = threading.Lock()
+    live = [0]
+
+    def slow(src, args):
+        with lock:
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+        time.sleep(0.4)
+        with lock:
+            live[0] -= 1
+
+    monkeypatch.setattr(pipeline, "process_one", slow)
+    for n in ("a.png", "b.png", "c.png", "d.png"):
+        _design(workspace / "input" / n)
+    r = ui.Runner()
+    r.start([(n, {}) for n in ("a.png", "b.png", "c.png", "d.png")], workers=3)
+    for _ in range(200):
+        if not r.status()["running"]:
+            break
+        time.sleep(0.05)
+    st = r.status()
+    assert sorted(st["done"]) == ["a.png", "b.png", "c.png", "d.png"], st["errors"]
+    assert peak[0] == 3, f"chạy song song tối đa {peak[0]} thay vì 3"

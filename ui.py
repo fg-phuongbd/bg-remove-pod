@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import argparse
 import errno
+import glob
 import json
 import threading
 import traceback
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import numpy as np
 from PIL import Image
@@ -97,10 +98,21 @@ def list_images() -> list[dict]:
         for p in folder.iterdir():
             if not p.is_file() or p.suffix.lower() not in pipeline.IMAGE_EXTS or p.name in seen:
                 continue
-            out = pipeline.OUTPUT_DIR / f"{p.stem}.png"
+            outs = outputs_for(p.stem)
             seen[p.name] = {"name": p.name, "waiting": waiting, "mtime": p.stat().st_mtime,
-                            "done": out.exists()}
+                            "done": bool(outs), "out": outs[0].name if outs else None}
     return sorted(seen.values(), key=lambda r: -r["mtime"])
+
+
+def outputs_for(stem: str) -> list[Path]:
+    """File in của một ảnh gốc, mới nhất trước.
+
+    Một ảnh gốc giờ có thể sinh nhiều file in, vì tên mang theo khung và vị trí: chạy lại cùng
+    ảnh ở cỡ khác sẽ ra file khác chứ không đè lên nhau."""
+    if not pipeline.OUTPUT_DIR.is_dir():
+        return []
+    hits = [p for p in pipeline.OUTPUT_DIR.glob(f"{glob.escape(stem)}_*.png")]
+    return sorted(hits, key=lambda p: -p.stat().st_mtime)
 
 
 def source_path(name: str) -> Path:
@@ -126,7 +138,10 @@ def preview(path: Path, box: int, tag: str) -> Path:
 
 # ---------------------------------------------------------------- hàng chạy
 class Runner:
-    """Chạy tuần tự trong một luồng nền, trang hỏi tiến độ bằng cách gọi lại."""
+    """Chạy nhiều ảnh cùng lúc trong luồng nền, trang hỏi tiến độ bằng cách gọi lại.
+
+    Phần lớn thời gian một ảnh nằm ở tiến trình con Real-ESRGAN, nên chạy song song vài ảnh
+    rút ngắn được đáng kể. Mặc định 2 vì mỗi ảnh giữ vài mảng cỡ 5000 x 5000 trong bộ nhớ."""
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
@@ -134,33 +149,35 @@ class Runner:
 
     def reset(self) -> None:
         self.queue: list[tuple[str, dict]] = []
-        self.current: str | None = None
+        self.busy: set[str] = set()
         self.done: list[str] = []
         self.errors: dict[str, str] = {}
-        self.running = False
+        self.workers = 0
 
     def status(self) -> dict:
         with self.lock:
-            return {"running": self.running, "current": self.current, "done": list(self.done),
-                    "errors": dict(self.errors), "left": len(self.queue)}
+            return {"running": self.workers > 0, "current": sorted(self.busy),
+                    "done": list(self.done), "errors": dict(self.errors), "left": len(self.queue)}
 
-    def start(self, jobs: list[tuple[str, dict]]) -> None:
+    def start(self, jobs: list[tuple[str, dict]], workers: int = 2) -> None:
         with self.lock:
-            if self.running:
+            if self.workers:
                 return
             self.reset()
             self.queue = list(jobs)
-            self.running = True
-        threading.Thread(target=self._work, daemon=True).start()
+            self.workers = max(1, min(int(workers), len(jobs) or 1))
+            count = self.workers
+        for _ in range(count):
+            threading.Thread(target=self._work, daemon=True).start()
 
     def _work(self) -> None:
         while True:
             with self.lock:
                 if not self.queue:
-                    self.running, self.current = False, None
+                    self.workers -= 1
                     return
                 name, settings = self.queue.pop(0)
-                self.current = name
+                self.busy.add(name)
             try:
                 pipeline.process_one(source_path(name), make_args(settings))
                 with self.lock:
@@ -168,6 +185,9 @@ class Runner:
             except Exception:  # noqa: BLE001 - một ảnh hỏng không được làm chết cả hàng
                 with self.lock:
                     self.errors[name] = traceback.format_exc(limit=3)
+            finally:
+                with self.lock:
+                    self.busy.discard(name)
 
 
 RUNNER = Runner()
@@ -207,13 +227,26 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(RUNNER.status())
             elif parts[0] == "api" and parts[1] == "report" and len(parts) == 3:
                 src = source_path(parts[2])
-                out = pipeline.OUTPUT_DIR / f"{src.stem}.png"
-                self._json(measure(out, src) if out.exists() else {})
+                outs = outputs_for(src.stem)
+                self._json(dict(measure(outs[0], src), out=outs[0].name) if outs else {})
             elif parts[0] == "src" and len(parts) == 2:
                 self._file(preview(source_path(parts[1]), THUMB_PX, "src"))
             elif parts[0] == "out" and len(parts) == 2:
-                src = source_path(parts[1])
-                self._file(preview(pipeline.OUTPUT_DIR / f"{src.stem}.png", PREVIEW_PX, "out"))
+                outs = outputs_for(source_path(parts[1]).stem)
+                if not outs:
+                    raise FileNotFoundError(parts[1])
+                self._file(preview(outs[0], PREVIEW_PX, "out"))
+            elif parts[0] == "file" and len(parts) == 2:
+                outs = outputs_for(source_path(parts[1]).stem)
+                if not outs:
+                    raise FileNotFoundError(parts[1])
+                body = outs[0].read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Content-Disposition", f'attachment; filename="{outs[0].name}"')
+                self.end_headers()
+                self.wfile.write(body)
             else:
                 self._json({"error": "không có đường dẫn này"}, 404)
         except FileNotFoundError as e:
@@ -221,8 +254,27 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001 - trả lỗi ra trang thay vì chết server
             self._json({"error": f"{type(e).__name__}: {e}"}, 500)
 
+    def _upload(self, route) -> None:
+        """Ghi một file kéo thả vào input/. Thân request là dữ liệu thô, tên nằm ở query."""
+        try:
+            name = safe_name(unquote(parse_qs(route.query).get("name", [""])[0]))
+            length = int(self.headers.get("Content-Length", 0))
+            if not 0 < length <= MAX_UPLOAD:
+                raise ValueError(f"dung lượng không hợp lệ: {length} byte")
+            pipeline.INPUT_DIR.mkdir(parents=True, exist_ok=True)
+            dest = pipeline.INPUT_DIR / name
+            dest.write_bytes(self.rfile.read(length))
+            Image.open(dest).verify()  # từ chối file không phải ảnh thay vì để pipeline chết sau
+            self._json({"name": name})
+        except Exception as e:  # noqa: BLE001
+            self._json({"error": f"{type(e).__name__}: {e}"}, 400)
+
     def do_POST(self) -> None:  # noqa: N802
-        if urlparse(self.path).path != "/api/run":
+        route = urlparse(self.path)
+        if route.path == "/api/upload":
+            self._upload(route)
+            return
+        if route.path != "/api/run":
             self._json({"error": "không có đường dẫn này"}, 404)
             return
         try:
@@ -230,10 +282,24 @@ class Handler(BaseHTTPRequestHandler):
             jobs = [(j["name"], j.get("settings", {})) for j in body.get("jobs", [])]
             for _, settings in jobs:
                 make_args(settings)  # kiểm cờ trước khi nhận, để lỗi hiện ngay chứ không giữa chừng
-            RUNNER.start(jobs)
+            RUNNER.start(jobs, int(body.get("workers", 2)))
             self._json(RUNNER.status())
         except Exception as e:  # noqa: BLE001
             self._json({"error": f"{type(e).__name__}: {e}"}, 400)
+
+
+MAX_UPLOAD = 64 * 1024 * 1024
+
+
+def safe_name(raw: str) -> str:
+    """Tên file do trình duyệt gửi lên, gọt cho an toàn để ghi vào input/.
+
+    Chỉ giữ phần tên cuối và bắt buộc phải là đuôi ảnh: tên từ bên ngoài không được phép trỏ ra
+    ngoài thư mục input/."""
+    name = Path(raw.replace("\\", "/")).name
+    if not name or name.startswith(".") or Path(name).suffix.lower() not in pipeline.IMAGE_EXTS:
+        raise ValueError(f"tên file không nhận: {raw!r}")
+    return name
 
 
 def serve(port: int = 8765, open_browser: bool = True) -> None:
