@@ -80,6 +80,7 @@ Nâng cao, thường không cần:
 | `--merge D` | 12 | Ngưỡng gộp hai màu gần nhau khi gom (CIELAB ΔE). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác bị gộp. |
 | `--fill-holes` | tắt | Không đục lỗ trong hình. Cắt hình: lấp chi tiết trắng bị model khoét (mắt, răng). Key `--shirt same`: thân hình nhân vật theo model cắt hình được giữ đặc (bóng áo tối trên nền đen, da trùng màu nền), ngoài thân hình vẫn key nên chữ ký, glow giữ nguyên. Không dùng nếu có lỗ chữ cố ý. |
 | `--keep-input` | tắt | Không chuyển ảnh gốc khỏi `input/`. |
+| `--floor D` | 32 | Key màu nền: màu cách nền dưới ngưỡng này (khoảng cách RGB) cho trong suốt hẳn. Dập quầng xám mà máy in vẫn phủ lót trắng. `0` = tắt. |
 | `--bg X` | auto | Cờ ẩn, ép thẳng cách xử lý khi nhận diện nền sai: `black`, `white`, `color`, `ai`, `none`. Thắng `--shirt`. |
 
 Ví dụ:
@@ -115,6 +116,24 @@ hình thái học, vì tô đặc sợi đó sẽ biến khoảng nền kẹt b�
 
 Đổi lại: lần chạy đầu phải tải model cắt hình (~900 MB) và mỗi ảnh chậm thêm khoảng 20 giây. Không
 dùng cờ này nếu thiết kế có lỗ xuyên cố ý.
+
+## Đồ họa phẳng trên nền đen: `--bg color`
+
+Key nền đen cho alpha bằng độ sáng, hợp với tranh có glow và airbrush. Với **đồ họa phẳng** màu khối
+(chữ, logo, huy hiệu) thì không hợp: mảng đỏ `(215, 8, 22)` chỉ ra alpha 214, tức mực chỉ đục 84% và
+vải lộ qua. Ép sang key khoảng cách màu thì mọi màu khối ra đặc hoàn toàn:
+
+```bash
+./run.sh --bg color input/design.png
+```
+
+Kèm theo đó là `--floor`, mặc định 32. Ảnh AI hay có mảng *gần* đen chứ không đen tuyệt đối, ví dụ
+một hình ellipse `(15, 13, 13)` sau logo. Key khoảng cách sẽ cho nó alpha khoảng 80 trên 255. Ghép
+trên màn hình nền đen thì vẫn đúng, nhưng máy DTG/DTF phủ lớp lót trắng theo alpha, nên mảng đó in ra
+thành vệt xám nổi trên vải. Ngưỡng sàn đẩy mọi màu cách nền dưới 32 về trong suốt hẳn, cắt sau khi đã
+tính xong dốc alpha nên mép chữ và màu viền không đổi. Trên thiết kế mẫu, quầng xám giảm từ 8% diện
+tích xuống 0,5%. Đổi lại, chi tiết gần đen thật sự cũng mất, lệch nhiều nhất 31 mức trên 255, mức này
+mắt không thấy trên vải đen. Đặt `--floor 0` để tắt.
 
 ## Lưu ý về file in cho áo tối
 

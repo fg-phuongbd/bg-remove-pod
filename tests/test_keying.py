@@ -259,3 +259,22 @@ def test_solid_core_ignores_a_hairline_of_mask_around_a_thin_detail():
     a = np.asarray(out)
     beside = a[150, 208:214]                                       # black gap inside the filament
     assert beside[:, 3].max() < 40, f"nền trong sợi mask bị ép đặc: {beside}"
+
+
+def test_key_color_floor_drops_a_near_background_area_but_keeps_edges():
+    """A large area a shade off the background composites back to itself at any alpha, so it
+    looks right on screen either way -- but a printer lays white underbase by alpha, and a
+    third-opacity area prints as a haze. The floor drops it without touching anything above."""
+    bg = (0, 0, 0)
+    im = Image.new("RGB", (300, 300), bg)
+    d = ImageDraw.Draw(im)
+    d.ellipse((40, 40, 260, 260), fill=(15, 13, 13))       # near-black plate behind the art
+    d.rectangle((90, 90, 210, 210), fill=(216, 13, 25))    # the art itself
+    d.rectangle((211, 90, 211, 210), fill=(108, 7, 13))    # a 50 % anti-aliased column
+    off = pipeline.key_color(im, floor=0.0)
+    on = pipeline.key_color(im)                            # default floor
+    assert off.getpixel((60, 150))[3] > 40                 # without a floor the plate takes ink
+    assert on.getpixel((60, 150))[3] == 0                  # with it the shirt shows instead
+    assert on.getpixel((150, 150)) == (216, 13, 25, 255)   # the art is untouched
+    assert on.getpixel((211, 150))[3] == off.getpixel((211, 150))[3]  # so is its soft edge
+    assert on.getpixel((211, 150))[:3] == off.getpixel((211, 150))[:3]

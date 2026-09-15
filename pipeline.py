@@ -29,6 +29,7 @@ DPI = 300
 DEFAULT_SIZE = "4500x5100"  # px; Printful/Merch-style print file (38.1 x 43.2 cm at 300 DPI)
 REMBG_MODEL = "birefnet-general"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+KEY_FLOOR = 32.0  # default for --floor: colors closer than this to the background are shirt, not ink
 MERGE_DELTA_E = 12.0  # default for --merge: palette colors closer than this (CIELAB) are always merged
 VTRACER_OPTS = dict(
     colormode="color", hierarchical="stacked", mode="spline",
@@ -415,14 +416,21 @@ def _rim_px(shape: tuple[int, ...]) -> int:
     return max(2, round(min(shape[:2]) * 0.002))
 
 
-def key_color(img: Image.Image, soft: float = 60.0) -> Image.Image:
+def key_color(img: Image.Image, soft: float = 60.0, floor: float = KEY_FLOOR) -> Image.Image:
     """Turn a solid colored background (e.g. light pink) into transparency, for a shirt of that
     same color. A pixel's alpha is its RGB distance from the background relative to the strongest
     design color nearby (an anti-aliased edge that is 50 % stroke + 50 % background comes out as
     the stroke color at 50 % alpha, not as an opaque pale pixel); isolated faint marks ramp over
     `soft` above the background's noise ceiling. Color is un-premultiplied against the
     background, so printing on a shirt of the background color reproduces the original exactly.
-    Design areas painted in the background color become transparent too (the shirt shows)."""
+    Design areas painted in the background color become transparent too (the shirt shows).
+
+    `floor` is a dead zone applied last: a color closer than that to the background is shirt,
+    not ink, whatever the ramp says. A near-black ellipse behind a logo on a black render still
+    composites back to itself at any alpha, so on screen either choice looks right -- but a
+    printer lays white underbase by alpha, and a large area at a third opacity comes out as a
+    grey haze on the fabric. Cutting instead of raising the ramp's start keeps every color
+    above the floor exactly as it was, edges and their recovered colors included."""
     from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
 
     rgb = np.asarray(img.convert("RGB")).astype(np.float32)
@@ -443,6 +451,7 @@ def key_color(img: Image.Image, soft: float = 60.0) -> Image.Image:
     rim_color = (rgb - (1.0 - rim_alpha[:, :, None]) * bg) / safe_rim
     in_gamut = ((rim_color > -8.0) & (rim_color < 263.0)).all(axis=2)
     alpha = np.where(near_bg & in_gamut, rim_alpha, alpha)
+    alpha = np.where(dist < floor, 0.0, alpha)  # dead zone: too close to the background to be ink
     safe = np.where(alpha > 0, alpha, 1.0)[:, :, None]
     color = np.clip((rgb - (1.0 - alpha[:, :, None]) * bg) / safe, 0, 255)
     out = np.dstack([color, alpha * 255.0]).round().astype(np.uint8)
@@ -454,7 +463,7 @@ def bg_rgb(img: Image.Image, bg: str) -> tuple[int, int, int]:
     return {"black": (0, 0, 0), "white": (255, 255, 255)}.get(bg) or bg_color(img)
 
 
-def key_bg(img: Image.Image, bg: str) -> Image.Image:
+def key_bg(img: Image.Image, bg: str, floor: float = KEY_FLOOR) -> Image.Image:
     """Turn a black (or white) background into transparency the way dark-shirt printers do.
 
     black: alpha = max(R,G,B) mapped from the background level to 255, color un-premultiplied
@@ -462,10 +471,12 @@ def key_bg(img: Image.Image, bg: str) -> Image.Image:
     Glows and airbrush fade naturally into the shirt. Design pixels that are truly black
     become transparent too, which is correct: the shirt is black.
     white: the mirror image (alpha = 255 - min(R,G,B)), for white shirts.
-    color: any other solid background, keyed by color distance (see key_color).
+    color: any other solid background, keyed by color distance (see key_color); `floor` is the
+    dead zone around the background color, and applies to that path only -- the black and white
+    keys already send anything near the background to nearly zero on their own.
     """
     if bg == "color":
-        return key_color(img)
+        return key_color(img, floor=floor)
     rgb = np.asarray(img.convert("RGB")).astype(np.float32)
     if bg == "white":
         rgb = 255.0 - rgb  # solve as black, then invert the colors back
@@ -596,7 +607,7 @@ def refine_edge(no_bg: Image.Image, original: Image.Image, band: float = 0.05) -
     # instead of meeting it at a hard seam: w = 0 at and outside the core edge, 1 deeper in.
     blurred = np.asarray(Image.fromarray((core * 255).astype(np.uint8), "L").filter(ImageFilter.GaussianBlur(r / 2)))
     w = np.where(core, np.clip(2.0 * blurred / 255.0 - 1.0, 0.0, 1.0), 0.0)  # never leaks across narrow gaps
-    keyed = np.asarray(key_color(original.convert("RGB")))
+    keyed = np.asarray(key_color(original.convert("RGB"), floor=0.0))  # band decides by distance: keep faint detail
     out = np.zeros_like(keyed)
     out[halo] = keyed[halo]
     orig = np.asarray(original.convert("RGBA"))
@@ -702,7 +713,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         shirt = None
     else:
         silhouette = remove_bg(original).getchannel("A") if args.fill_holes else None
-        keyed = key_bg(original, bg)
+        keyed = key_bg(original, bg, args.floor)
         if silhouette:
             keyed = solid_core(keyed, original, silhouette, bg_rgb(original, bg))
         cut = crop_to_content(keyed, min_alpha=40)
@@ -734,7 +745,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         # keyed background: upscale the flat RGB first (cleaner edges, denoised background),
         # key at full resolution, then crop
         big_rgb = upscale(original.convert("RGB"), model=model)
-        keyed = key_bg(big_rgb, bg)
+        keyed = key_bg(big_rgb, bg, args.floor)
         if silhouette:
             keyed = solid_core(keyed, big_rgb, silhouette, bg_rgb(big_rgb, bg))
         keyed = crop_to_content(keyed, min_alpha=40)
@@ -783,6 +794,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="gom về tối đa N màu. Mặc định: 12 khi --vector, không gom khi raster. 0 = không gom")
     p.add_argument("--merge", type=float, default=MERGE_DELTA_E,
                    help=f"ngưỡng gộp màu gần nhau (CIELAB ΔE, mặc định {MERGE_DELTA_E:g}). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác nhau bị gộp")
+    p.add_argument("--floor", type=float, default=KEY_FLOOR,
+                   help=f"key màu nền: màu cách nền dưới ngưỡng này (khoảng cách RGB) coi như màu áo, cho trong suốt hẳn. "
+                        f"Mặc định {KEY_FLOOR:g}, dập quầng xám mà máy in vẫn phủ lót trắng. 0 = tắt")
     p.add_argument("--fill-holes", action="store_true",
                    help="không đục lỗ trong hình. Cắt hình: lấp vùng trong suốt bị bao kín (chấm sáng, răng bị model khoét). "
                         "Key (--shirt same): thân hình theo model cắt hình được giữ đặc (bóng áo tối, da trùng màu nền), ngoài thân hình vẫn key. "
