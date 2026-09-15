@@ -373,6 +373,41 @@ def detect_bg(img: Image.Image) -> str:
     return "color"
 
 
+def is_flat_art(img: Image.Image, threshold: float = 0.9) -> bool:
+    """True for flat graphic art -- letters, logos, badges built from areas of one solid color --
+    and False for anything with gradients, texture or photographic shading.
+
+    Measured on the picture itself, on pixels far enough from the background to be ink. Reading
+    it off the keyed result instead would beg the question: a brightness key makes dark ink
+    faint, so on a photograph it leaves mostly the bright smooth areas standing and those look
+    flat. detect_style answers a different question (which upscaling model suits the picture)
+    and is deliberately easier to satisfy; this one gates how the background is keyed, so it
+    only says yes when nearly every body pixel sits in uniform color."""
+    im = img.convert("RGB")
+    im.thumbnail((512, 512))
+    a = np.asarray(im).astype(np.float32)
+    dev = np.abs(a - np.asarray(im.filter(ImageFilter.BoxBlur(2))).astype(np.float32)).sum(axis=2)
+    dist = np.linalg.norm(a - np.array(bg_color(im), dtype=np.float32), axis=2)
+    edge = _edge_mask(np.asarray(im.filter(ImageFilter.MedianFilter(5))), threshold=40)
+    body = (dist > 60) & ~edge
+    if body.sum() < 100:
+        return False
+    return float((dev[body] < 12).mean()) > threshold
+
+
+def key_style(kind: str, flat: bool) -> str:
+    """Which key a design on a solid background wants: brightness or distance.
+
+    The black and white keys set alpha from brightness, which is what artwork that fades into
+    the shirt needs -- a glow, an airbrush, a photograph's shadows all thin out smoothly. Flat
+    graphic art has no such fade: every color is meant as solid ink, and brightness keying
+    leaves it partly see-through (a solid red at (215, 8, 22) comes out 84 % opaque, so the
+    fabric shows through the letters). For that, alpha belongs to how far the color sits from
+    the shirt, which is what the color key does -- and it reads black or white as just another
+    background color."""
+    return "color" if flat and kind in ("black", "white") else kind
+
+
 def resolve_bg(kind: str, shirt: str) -> tuple[str, bool]:
     """(processing mode, refine edge?) from the background kind and the shirt the design is for.
 
@@ -713,18 +748,21 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         shirt = None
     else:
         silhouette = remove_bg(original).getchannel("A") if args.fill_holes else None
+        if args.bg == "auto":
+            bg = key_style(bg, is_flat_art(original))  # flat art: distance, not brightness
         keyed = key_bg(original, bg, args.floor)
         if silhouette:
             keyed = solid_core(keyed, original, silhouette, bg_rgb(original, bg))
         cut = crop_to_content(keyed, min_alpha=40)
-        shirt = {"black": (20, 20, 22), "white": (245, 245, 245)}.get(bg) or bg_color(original)
+        shirt = {"black": (20, 20, 22), "white": (245, 245, 245)}.get(kind) or bg_color(original)
     cut.save(WORK_DIR / f"{src.stem}-cut.png")
 
     style = detect_style(cut) if args.style == "auto" else args.style
     colors = args.colors if args.colors is not None else (12 if args.vector else 0)
     model = "realesrgan-x4plus-anime" if style == "flat" else "realesrgan-x4plus"
     how = {"none": "đã trong suốt", "ai": "cắt hình" + (" + tinh chỉnh viền" if refine else ""),
-           "black": "key nền đen", "white": "key nền trắng", "color": "key màu nền"}[bg]
+           "black": "key nền đen", "white": "key nền trắng",
+           "color": "key khoảng cách màu" if kind in ("black", "white") else "key màu nền"}[bg]
     how += (" + thân hình đặc" if bg not in ("ai", "none") else " + lấp lỗ") if args.fill_holes and bg != "none" else ""
     shirt_txt = "" if bg == "none" else f" | áo: {SHIRT_LABEL['same' if bg != 'ai' else 'other']}"
     print(f"  nền: {kind}{shirt_txt} | cách: {how} | kiểu: {style} | {'vector' if args.vector else 'raster'}"

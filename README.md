@@ -117,17 +117,22 @@ hình thái học, vì tô đặc sợi đó sẽ biến khoảng nền kẹt b�
 Đổi lại: lần chạy đầu phải tải model cắt hình (~900 MB) và mỗi ảnh chậm thêm khoảng 20 giây. Không
 dùng cờ này nếu thiết kế có lỗ xuyên cố ý.
 
-## Đồ họa phẳng trên nền đen: `--bg color`
+## Hai kiểu key, pipeline tự chọn
 
-Key nền đen cho alpha bằng độ sáng, hợp với tranh có glow và airbrush. Với **đồ họa phẳng** màu khối
-(chữ, logo, huy hiệu) thì không hợp: mảng đỏ `(215, 8, 22)` chỉ ra alpha 214, tức mực chỉ đục 84% và
-vải lộ qua. Ép sang key khoảng cách màu thì mọi màu khối ra đặc hoàn toàn:
+Key nền đen hay trắng cho alpha bằng **độ sáng**. Đó là thứ tranh có glow, airbrush hay ảnh chụp cần:
+chỗ tối mỏng dần rồi tan vào áo. Với **đồ họa phẳng** màu khối (chữ, logo, huy hiệu) thì sai: mảng đỏ
+`(215, 8, 22)` chỉ ra alpha 214, mực đục 84% và vải lộ qua nét chữ.
 
-```bash
-./run.sh --bg color input/design.png
-```
+Nên pipeline đo ảnh gốc trước khi key. Nếu gần như mọi pixel mực nằm trong mảng màu đều thì đó là đồ
+họa phẳng, và nền được key theo **khoảng cách màu** thay vì độ sáng, cho màu khối đặc hoàn toàn. Còn
+lại giữ key độ sáng. Dòng log in ra `cách: key khoảng cách màu` hay `cách: key nền đen` để bạn biết
+nó chọn gì. Ép tay bằng `--bg black` hoặc `--bg color` nếu nhận diện sai.
 
-Kèm theo đó là `--floor`, mặc định 32. Ảnh AI hay có mảng *gần* đen chứ không đen tuyệt đối, ví dụ
+Phép đo này khắt khe hơn `kiểu: flat/detail` ở cùng dòng log, vì cái đó chỉ dùng để chọn model
+upscale. Nó cũng đo trên ảnh gốc chứ không đo trên bản đã key: key độ sáng làm mực tối nhạt đi, nên
+trên ảnh chụp nó chỉ còn lại các mảng sáng mịn và trông như phẳng.
+
+Đi kèm key khoảng cách là `--floor`, mặc định 32. Ảnh AI hay có mảng *gần* đen chứ không đen tuyệt đối, ví dụ
 một hình ellipse `(15, 13, 13)` sau logo. Key khoảng cách sẽ cho nó alpha khoảng 80 trên 255. Ghép
 trên màn hình nền đen thì vẫn đúng, nhưng máy DTG/DTF phủ lớp lót trắng theo alpha, nên mảng đó in ra
 thành vệt xám nổi trên vải. Ngưỡng sàn đẩy mọi màu cách nền dưới 32 về trong suốt hẳn, cắt sau khi đã

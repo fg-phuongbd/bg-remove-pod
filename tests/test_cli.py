@@ -87,3 +87,13 @@ def test_main_keyed_black_art_makes_review_on_shirt(tmp_path, monkeypatch):
     assert (pipeline.OUTPUT_DIR / "dark.png").exists()
     review = Image.open(pipeline.REVIEW_DIR / "dark.png").convert("RGB")
     assert review.getpixel((review.width - 3, 3)) == (20, 20, 22)  # result shown on the dark shirt color
+
+
+def test_key_style_picks_distance_for_flat_art():
+    k = pipeline.key_style
+    assert k("black", True) == "color"    # solid ink wants distance, not brightness
+    assert k("white", True) == "color"
+    assert k("black", False) == "black"   # glows and photos keep the brightness key
+    assert k("white", False) == "white"
+    assert k("color", True) == "color"    # already the distance key
+    assert k("color", False) == "color"

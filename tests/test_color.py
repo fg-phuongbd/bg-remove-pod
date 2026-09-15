@@ -90,3 +90,22 @@ def test_fringe_takes_neighbour_color():
     assert out.getpixel((9, 30))[:3] == out.getpixel((30, 30))[:3]
     assert 0 < out.getpixel((9, 30))[3] < 255
     assert len(_opaque_colors(out)) == 1
+
+
+def test_is_flat_art_separates_solid_areas_from_shading():
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    flat = Image.new("RGB", (400, 400), (0, 0, 0))
+    d = ImageDraw.Draw(flat)
+    d.rectangle((40, 40, 360, 200), fill=(215, 8, 22))    # solid areas, hard edges
+    d.rectangle((40, 220, 360, 360), fill=(240, 190, 60))
+    assert pipeline.is_flat_art(flat) is True
+
+    shaded = np.zeros((400, 400, 3), dtype=np.float32)
+    yy, xx = np.indices((400, 400))
+    lit = ((xx > 40) & (xx < 360) & (yy > 40) & (yy < 360))
+    shaded[lit] = np.dstack([80 + xx / 2.2, 30 + yy / 4.0, 200 - xx / 3.0])[lit]  # smooth shading
+    rng = np.random.default_rng(11)
+    shaded[lit] += rng.normal(0, 6, shaded[lit].shape)    # photographic grain
+    assert pipeline.is_flat_art(Image.fromarray(shaded.round().clip(0, 255).astype(np.uint8))) is False
