@@ -36,6 +36,33 @@ Thử ngay với ảnh mẫu (minh họa phẳng nền trắng):
 cp examples/mascot.jpg input/ && ./run.sh --vector --fill-holes
 ```
 
+## Trang xem tại máy: `./run.sh --ui`
+
+```bash
+./run.sh --ui
+```
+
+Mở một trang tại `127.0.0.1:8765`, chạy bằng thư viện có sẵn của Python, không thêm phụ thuộc nào.
+Trang làm ba việc mà dòng lệnh làm không tốt:
+
+**Xem trên đúng màu áo sẽ in.** Ô chọn nền có bốn lựa chọn: màu áo, xám, checkerboard, trắng. Mặc
+định là màu áo. File cho áo tối phần lớn là mực sáng, nên xem trên nền trắng hay checkerboard sáng
+thì nét trắng biến mất và trông như thủng trong khi không hề thủng.
+
+**Cờ nhớ theo từng ảnh.** Ảnh có người bật `thân hình đặc`, poster thì không, bản in nhỏ đặt vị trí
+riêng. Mỗi thẻ ảnh hiện cờ của nó, và trình duyệt nhớ lại khi bạn mở trang lần sau.
+
+**Ba con số chấm chất lượng** hiện ngay dưới ảnh:
+
+| Số | Nghĩa |
+|---|---|
+| mực đặc | phần trăm pixel đục hoàn toàn. Thấp nghĩa là mực mỏng, in ra vải lộ qua. |
+| mực trùng màu áo | phần trăm mực đục nhưng cùng màu áo, tức chỗ máy phủ lót trắng rồi in đè lên vải. Càng thấp càng tốt. |
+| sai số khi in | ghép file lên màu áo rồi so với ảnh gốc, tính theo mức trên 255. |
+
+Ảnh gốc được giữ nguyên tại chỗ, không bị chuyển sang `input/done/`, để chạy lại cùng một ảnh với cờ
+khác được nhiều lần.
+
 ## Một câu hỏi duy nhất: in lên áo màu gì?
 
 Pipeline nhìn **nền** của ảnh gốc (vành 2 % quanh ảnh: đen, trắng, màu trơn, hay đã trong suốt) và

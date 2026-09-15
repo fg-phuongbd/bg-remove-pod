@@ -921,6 +921,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                        help="thiết kế chiếm bao nhiêu phần trăm khung in, giữ nguyên tỉ lệ hình. Mặc định 100 = lấp đầy khung")
     daily.add_argument("--vector", action="store_true",
                        help="minh họa phẳng: gom màu rồi trace vector (mảng màu tuyệt đối phẳng, viền cong mượt). Mặc định là raster: upscale AI, giữ nguyên màu")
+    daily.add_argument("--ui", action="store_true",
+                       help="mở trang xem tại máy: chọn cờ theo từng ảnh, xem kết quả trên đúng màu áo, kèm số chấm chất lượng")
     daily.add_argument("files", nargs="*", help="chỉ xử lý các file này thay cho cả input/")
     p = p.add_argument_group("nâng cao (thường không cần)")
     p.add_argument("--bg", choices=["auto", "black", "white", "color", "ai", "none"], default="auto", help=argparse.SUPPRESS)
@@ -945,6 +947,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.ui:
+        import ui  # noqa: PLC0415 - chỉ nạp khi cần, để chạy dòng lệnh không phải nạp thêm gì
+
+        ui.serve()
+        return 0
     check_tools()
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     files = _collect(args)

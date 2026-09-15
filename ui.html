@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tshirt-pipeline</title>
+<style>
+  :root {
+    --chrome: #4a4a4d; --panel: #3c3c40; --line: #5a5a5f;
+    --text: #ececef; --dim: #a9a9b0; --accent: #7fb4ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; height: 100vh; display: grid; grid-template-columns: 340px 1fr;
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--chrome); color: var(--text);
+  }
+  /* Khung trang cố tình để xám trung tính: nền trắng làm mực sáng biến mất và
+     trông như thủng, đúng cái bẫy mà trang này sinh ra để tránh. */
+  aside { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  header { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0 0 2px; font-size: 15px; font-weight: 600; }
+  header p { margin: 0; color: var(--dim); font-size: 12px; }
+  #list { overflow-y: auto; flex: 1; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px;
+    cursor: pointer; display: grid; grid-template-columns: 56px 1fr; gap: 10px; align-items: center;
+  }
+  .card.on { border-color: var(--accent); }
+  .card img { width: 56px; height: 56px; object-fit: contain; background: #808080; border-radius: 4px; }
+  .card .nm { font-size: 12px; word-break: break-all; line-height: 1.3; }
+  .card .st { font-size: 11px; color: var(--dim); margin-top: 2px; }
+  .card .st b { color: var(--accent); font-weight: 600; }
+  main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  #bar {
+    padding: 10px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 14px;
+    align-items: center; flex-wrap: wrap;
+  }
+  label { font-size: 12px; color: var(--dim); display: inline-flex; gap: 6px; align-items: center; }
+  select, input[type=number], input[type=text] {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 5px; padding: 4px 6px; font: inherit; font-size: 12px;
+  }
+  input[type=number] { width: 66px; }
+  input[type=text] { width: 96px; }
+  button {
+    background: var(--accent); color: #10233d; border: 0; border-radius: 6px;
+    padding: 7px 14px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.ghost { background: var(--panel); color: var(--text); border: 1px solid var(--line); font-weight: 500; }
+  button:disabled { opacity: .5; cursor: default; }
+  #stage { flex: 1; overflow: auto; padding: 16px; display: flex; gap: 16px; min-height: 0; }
+  .pane { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .pane h2 { margin: 0; font-size: 12px; font-weight: 600; color: var(--dim); }
+  .view {
+    flex: 1; border-radius: 8px; border: 1px solid var(--line); display: grid; place-items: center;
+    padding: 10px; min-height: 240px; overflow: hidden;
+  }
+  .view img { max-width: 100%; max-height: 72vh; object-fit: contain; }
+  .checker {
+    background-image:
+      linear-gradient(45deg, #bbb 25%, transparent 25%), linear-gradient(-45deg, #bbb 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #bbb 75%), linear-gradient(-45deg, transparent 75%, #bbb 75%);
+    background-size: 22px 22px;
+    background-position: 0 0, 0 11px, 11px -11px, -11px 0;
+    background-color: #fff;
+  }
+  #nums { display: flex; gap: 22px; padding: 10px 16px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  #nums div { font-size: 12px; color: var(--dim); }
+  #nums b { display: block; font-size: 17px; color: var(--text); font-weight: 600; }
+  #msg { padding: 0 16px 10px; color: var(--dim); font-size: 12px; white-space: pre-wrap; }
+  .empty { color: var(--dim); font-size: 13px; padding: 20px; text-align: center; }
+</style>
+</head>
+<body>
+<aside>
+  <header>
+    <h1>tshirt-pipeline</h1>
+    <p id="count">đang nạp…</p>
+  </header>
+  <div id="list"></div>
+</aside>
+
+<main>
+  <div id="bar">
+    <label>khung in <input type="text" id="size" value="4500x5100"></label>
+    <label><input type="checkbox" id="fill_holes"> thân hình đặc</label>
+    <label>đặt
+      <select id="place">
+        <option>center</option><option>top</option><option>bottom</option>
+        <option>left</option><option>right</option><option>top-left</option>
+        <option>top-right</option><option>bottom-left</option><option>bottom-right</option>
+      </select>
+    </label>
+    <label>cỡ <input type="number" id="scale" value="100" min="1" max="100" step="1">%</label>
+    <label><input type="checkbox" id="vector"> vector</label>
+    <button id="run">Chạy ảnh đang chọn</button>
+    <button id="runall" class="ghost">Chạy tất cả đang chờ</button>
+    <span style="flex:1"></span>
+    <label>nền xem
+      <select id="bgpick">
+        <option value="shirt">màu áo</option>
+        <option value="#808080">xám</option>
+        <option value="checker">checkerboard</option>
+        <option value="#ffffff">trắng</option>
+      </select>
+    </label>
+  </div>
+
+  <div id="stage">
+    <div class="pane"><h2>ảnh gốc</h2><div class="view" id="srcview"></div></div>
+    <div class="pane"><h2>file in, ghép trên nền đã chọn</h2><div class="view" id="outview"></div></div>
+  </div>
+
+  <div id="nums"></div>
+  <div id="msg"></div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const state = { images: [], pick: null, report: null, polling: false, saved: {} };
+
+// Cờ nhớ theo từng ảnh, không phải một bộ chung cho cả lô: ảnh có người cần --fill-holes,
+// poster thì không, và bản in nhỏ cần vị trí riêng. Giữ qua localStorage để đóng trang mở lại
+// vẫn còn.
+const FLAGS = ["size", "fill_holes", "place", "scale", "vector"];
+const DEFAULTS = { size: "4500x5100", fill_holes: false, place: "center", scale: 100, vector: false };
+try { state.saved = JSON.parse(localStorage.getItem("tsp-settings") || "{}"); } catch (e) { state.saved = {}; }
+
+function readBar() {
+  return {
+    size: $("#size").value.trim() || DEFAULTS.size,
+    fill_holes: $("#fill_holes").checked,
+    place: $("#place").value,
+    scale: parseFloat($("#scale").value) || 100,
+    vector: $("#vector").checked,
+  };
+}
+
+function writeBar(s) {
+  $("#size").value = s.size;
+  $("#fill_holes").checked = s.fill_holes;
+  $("#place").value = s.place;
+  $("#scale").value = s.scale;
+  $("#vector").checked = s.vector;
+}
+
+function settingsFor(name) {
+  return Object.assign({}, DEFAULTS, state.saved[name] || {});
+}
+
+function remember() {
+  if (!state.pick) return;
+  state.saved[state.pick] = readBar();
+  try { localStorage.setItem("tsp-settings", JSON.stringify(state.saved)); } catch (e) { /* riêng tư */ }
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const j = await r.json();
+  if (j && j.error) throw new Error(j.error);
+  return j;
+}
+
+async function loadList() {
+  state.images = await api("/api/images");
+  const waiting = state.images.filter(i => i.waiting).length;
+  $("#count").textContent = `${state.images.length} ảnh · ${waiting} đang chờ`;
+  const list = $("#list");
+  list.innerHTML = "";
+  if (!state.images.length) {
+    list.innerHTML = '<div class="empty">Thả ảnh vào thư mục <b>input/</b> rồi tải lại trang.</div>';
+    return;
+  }
+  for (const im of state.images) {
+    const el = document.createElement("div");
+    el.className = "card" + (state.pick === im.name ? " on" : "");
+    const s = state.saved[im.name];
+    const tag = s ? [s.fill_holes ? "thân hình đặc" : "", s.vector ? "vector" : "",
+                     (s.place !== "center" || s.scale !== 100) ? `${s.place} ${s.scale}%` : ""]
+                     .filter(Boolean).join(" · ") : "";
+    el.innerHTML = `<img loading="lazy" src="/src/${encodeURIComponent(im.name)}" alt="">
+      <div><div class="nm">${im.name}</div>
+      <div class="st">${im.waiting ? "đang chờ" : "đã xử lý"}${im.done ? " · <b>có file in</b>" : ""}${tag ? "<br>" + tag : ""}</div></div>`;
+    el.onclick = () => select(im.name);
+    list.appendChild(el);
+  }
+}
+
+async function select(name) {
+  state.pick = name;
+  writeBar(settingsFor(name));
+  loadList();
+  $("#srcview").innerHTML = `<img src="/src/${encodeURIComponent(name)}" alt="">`;
+  const out = $("#outview");
+  out.innerHTML = `<img src="/out/${encodeURIComponent(name)}?t=${Date.now()}" alt=""
+                        onerror="this.replaceWith(Object.assign(document.createElement('div'),
+                        {className:'empty', textContent:'Chưa có file in. Bấm Chạy.'}))">`;
+  state.report = null;
+  $("#nums").innerHTML = "";
+  try {
+    const rep = await api(`/api/report/${encodeURIComponent(name)}`);
+    if (rep && rep.shirt) { state.report = rep; showNums(rep); }
+  } catch (e) { /* chưa chạy thì chưa có số, không sao */ }
+  paintBg();
+}
+
+function showNums(r) {
+  $("#nums").innerHTML = `
+    <div>mực đặc<b>${r.dac}%</b></div>
+    <div>mực trùng màu áo<b>${r.thua}%</b></div>
+    <div>sai số khi in<b>${r.sai_so ?? "—"}</b></div>
+    <div>màu áo<b style="font-size:13px">${r.shirt}</b></div>`;
+}
+
+function paintBg() {
+  const v = $("#bgpick").value;
+  const el = $("#outview");
+  el.classList.toggle("checker", v === "checker");
+  el.style.background = v === "checker" ? "" :
+    (v === "shirt" ? (state.report ? state.report.shirt : "#808080") : v);
+}
+
+async function run(names) {
+  if (!names.length) { $("#msg").textContent = "Chưa chọn ảnh nào."; return; }
+  remember();
+  await api("/api/run", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ jobs: names.map(n => ({ name: n, settings: settingsFor(n) })) })
+  });
+  poll();
+}
+
+async function poll() {
+  if (state.polling) return;
+  state.polling = true;
+  $("#run").disabled = $("#runall").disabled = true;
+  while (true) {
+    const st = await api("/api/status");
+    const errs = Object.entries(st.errors);
+    $("#msg").textContent = st.running
+      ? `Đang chạy ${st.current} · còn ${st.left} · xong ${st.done.length}`
+      : (st.done.length || errs.length ? `Xong ${st.done.length} ảnh${errs.length ? `, lỗi ${errs.length}` : ""}` : "");
+    if (errs.length) $("#msg").textContent += "\n" + errs.map(([n, e]) => `${n}: ${e.split("\n").slice(-2)[0]}`).join("\n");
+    if (!st.running) break;
+    await new Promise(r => setTimeout(r, 1200));
+  }
+  $("#run").disabled = $("#runall").disabled = false;
+  state.polling = false;
+  await loadList();
+  if (state.pick) await select(state.pick);
+}
+
+$("#run").onclick = () => run(state.pick ? [state.pick] : []).catch(e => $("#msg").textContent = e.message);
+$("#runall").onclick = () => run(state.images.filter(i => i.waiting).map(i => i.name))
+  .catch(e => $("#msg").textContent = e.message);
+$("#bgpick").onchange = paintBg;
+for (const f of FLAGS) $("#" + f).onchange = () => {
+  remember();
+  loadList();
+  if (state.pick) $("#msg").textContent = "Cờ đã đổi cho ảnh này, bấm Chạy để áp dụng.";
+};
+
+loadList().then(() => { if (state.images.length) select(state.images[0].name); });
+poll();
+</script>
+</body>
+</html>

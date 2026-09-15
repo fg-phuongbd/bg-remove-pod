@@ -1,0 +1,151 @@
+import json
+import sys
+import threading
+import urllib.request
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+
+import numpy as np
+import pytest
+from PIL import Image, ImageDraw
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import pipeline  # noqa: E402
+import ui  # noqa: E402
+
+
+@pytest.fixture
+def workspace(tmp_path, monkeypatch):
+    """Thư mục input/output/work riêng, để test không đụng vào ảnh thật của dự án."""
+    for name, attr in (("input", "INPUT_DIR"), ("output", "OUTPUT_DIR"),
+                       ("work", "WORK_DIR"), ("review", "REVIEW_DIR")):
+        d = tmp_path / name
+        d.mkdir()
+        monkeypatch.setattr(pipeline, attr, d)
+    monkeypatch.setattr(ui, "CACHE", tmp_path / "work" / "ui")
+    (tmp_path / "input" / "done").mkdir()
+    return tmp_path
+
+
+def _design(path: Path):
+    im = Image.new("RGB", (240, 240), (0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rectangle((40, 40, 200, 200), fill=(215, 8, 22))
+    d.rectangle((90, 90, 150, 150), fill=(255, 255, 255))
+    im.save(path)
+    return im
+
+
+def test_make_args_starts_from_the_cli_defaults():
+    """Trang không được lệch khỏi dòng lệnh khi có cờ mới, nên nó mượn chính mặc định của CLI."""
+    a = ui.make_args({"scale": 26.0, "place": "top-right"})
+    assert (a.scale, a.place) == (26.0, "top-right")
+    assert a.size == pipeline.parse_args([]).size      # cờ không đụng tới giữ nguyên mặc định
+    assert a.keep_input is True                        # chạy lại cùng ảnh là việc thường trên trang
+    assert a.merge == pipeline.MERGE_DELTA_E           # cả những cờ trang không hiện
+
+
+def test_make_args_rejects_an_unknown_flag():
+    with pytest.raises(ValueError, match="dungsai"):
+        ui.make_args({"dungsai": 1})
+
+
+def test_measure_reads_solidity_waste_and_fidelity(workspace):
+    src = workspace / "input" / "a.png"
+    _design(src)
+    out = workspace / "output" / "a.png"
+    pipeline.process_one(src, ui.make_args({"size": "600x600"}))
+    rep = ui.measure(out, src)
+    assert rep["dac"] > 80                             # thiết kế phẳng: mực phải đặc
+    assert rep["thua"] < 5                             # không in đè lên áo đen
+    assert rep["sai_so"] < 8                           # ghép lên áo ra lại ảnh gốc
+    assert rep["shirt"] == "#141416"                   # nền đen -> màu áo đen để xem
+
+
+def test_measure_on_an_empty_file_does_not_blow_up(workspace):
+    out = workspace / "output" / "b.png"
+    Image.new("RGBA", (10, 10), (0, 0, 0, 0)).save(out)
+    src = workspace / "input" / "b.png"
+    _design(src)
+    assert ui.measure(out, src)["dac"] == 0.0
+
+
+def test_list_images_sees_both_folders_and_flags_finished_work(workspace):
+    _design(workspace / "input" / "cho.png")
+    _design(workspace / "input" / "done" / "xong.png")
+    Image.new("RGBA", (8, 8)).save(workspace / "output" / "xong.png")
+    rows = {r["name"]: r for r in ui.list_images()}
+    assert rows["cho.png"]["waiting"] is True and rows["cho.png"]["done"] is False
+    assert rows["xong.png"]["waiting"] is False and rows["xong.png"]["done"] is True
+
+
+def test_preview_is_cached_until_the_source_changes(workspace):
+    src = workspace / "input" / "a.png"
+    _design(src)
+    first = ui.preview(src, 64, "src")
+    assert max(Image.open(first).size) == 64
+    stamp = first.stat().st_mtime_ns
+    assert ui.preview(src, 64, "src").stat().st_mtime_ns == stamp   # dùng lại
+    src.touch()
+    _design(src)
+    assert ui.preview(src, 64, "src").stat().st_mtime_ns != stamp   # gốc đổi thì dựng lại
+
+
+@pytest.fixture
+def server(workspace):
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), ui.Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_address[1]}"
+    srv.shutdown()
+    srv.server_close()
+
+
+def get(base, path):
+    with urllib.request.urlopen(base + path) as r:  # noqa: S310 - địa chỉ do test dựng
+        return r.status, r.read()
+
+
+def test_server_serves_the_page_and_the_listing(server, workspace):
+    _design(workspace / "input" / "a.png")
+    status, body = get(server, "/")
+    assert status == 200 and b"tshirt-pipeline" in body
+    status, body = get(server, "/api/images")
+    assert [r["name"] for r in json.loads(body)] == ["a.png"]
+    status, body = get(server, "/src/a.png")
+    assert status == 200 and Image.open(__import__("io").BytesIO(body)).mode == "RGBA"
+
+
+def test_server_answers_a_missing_image_with_404(server):
+    with pytest.raises(urllib.error.HTTPError) as e:
+        get(server, "/src/khong-co.png")
+    assert e.value.code == 404
+
+
+def test_server_runs_a_job_and_reports_on_it(server, workspace):
+    src = workspace / "input" / "a.png"
+    _design(src)
+    body = json.dumps({"jobs": [{"name": "a.png", "settings": {"size": "400x400"}}]}).encode()
+    req = urllib.request.Request(server + "/api/run", body, {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req) as r:  # noqa: S310
+        assert r.status == 200
+    for _ in range(600):                                  # hàng chạy trong luồng nền
+        if not json.loads(get(server, "/api/status")[1])["running"]:
+            break
+        __import__("time").sleep(0.1)
+    st = json.loads(get(server, "/api/status")[1])
+    assert st["done"] == ["a.png"], st["errors"]
+    assert (workspace / "output" / "a.png").exists()
+    assert src.exists(), "trang phải giữ ảnh gốc tại chỗ để chạy lại được"
+    rep = json.loads(get(server, "/api/report/a.png")[1])
+    assert rep["dac"] > 80
+
+
+def test_server_refuses_a_job_with_an_unknown_flag(server, workspace):
+    _design(workspace / "input" / "a.png")
+    body = json.dumps({"jobs": [{"name": "a.png", "settings": {"dungsai": 1}}]}).encode()
+    req = urllib.request.Request(server + "/api/run", body, {"Content-Type": "application/json"})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req)  # noqa: S310
+    assert e.value.code == 400
+    assert not ui.RUNNER.status()["running"]
