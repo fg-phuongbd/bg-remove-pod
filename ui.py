@@ -12,6 +12,7 @@ Phần tính toán nằm ở các hàm thuần phía trên; phần HTTP chỉ b�
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import threading
 import traceback
@@ -236,7 +237,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(port: int = 8765, open_browser: bool = True) -> None:
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    except OSError as e:
+        if e.errno != errno.EADDRINUSE:
+            raise
+        print(f"Cổng {port} đang bận: nhiều khả năng một trang khác đang mở ở http://127.0.0.1:{port}/\n"
+              f"Mở lại tab đó, hoặc tắt tiến trình cũ rồi chạy lại. Sau khi sửa code cũng phải tắt và "
+              f"chạy lại thì trang mới cập nhật.")
+        return
     url = f"http://127.0.0.1:{port}/"
     print(f"Trang xem đang chạy tại {url}  (Ctrl+C để dừng)")
     if open_browser:

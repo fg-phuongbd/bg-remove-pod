@@ -57,6 +57,11 @@
     padding: 10px; min-height: 240px; overflow: hidden;
   }
   .view img { max-width: 100%; max-height: 72vh; object-fit: contain; }
+  /* Viền đứt = mép khung in. Không có nó thì khung trong suốt lẫn vào nền xem và
+     không thể biết hình đang nằm ở đâu trong khung. */
+  #outview img { outline: 1px dashed rgba(255,255,255,.45); outline-offset: 0; }
+  #hint { padding: 8px 16px 0; color: #ffd479; font-size: 12px; }
+  #hint:empty { display: none; }
   .checker {
     background-image:
       linear-gradient(45deg, #bbb 25%, transparent 25%), linear-gradient(-45deg, #bbb 25%, transparent 25%),
@@ -107,6 +112,8 @@
     </label>
   </div>
 
+  <div id="hint"></div>
+
   <div id="stage">
     <div class="pane"><h2>ảnh gốc</h2><div class="view" id="srcview"></div></div>
     <div class="pane"><h2>file in, ghép trên nền đã chọn</h2><div class="view" id="outview"></div></div>
@@ -143,10 +150,21 @@ function writeBar(s) {
   $("#place").value = s.place;
   $("#scale").value = s.scale;
   $("#vector").checked = s.vector;
+  hint();
 }
 
 function settingsFor(name) {
   return Object.assign({}, DEFAULTS, state.saved[name] || {});
+}
+
+function hint() {
+  // Ở cỡ 100% thiết kế đã lấp kín khung, nên neo vào góc nào cũng gần như nhau: không còn
+  // chỗ trống để dịch. Đây là chỗ dễ tưởng là app hỏng nhất.
+  const s = readBar();
+  $("#hint").textContent = (s.place !== "center" && s.scale >= 95)
+    ? `Cỡ đang ${s.scale}% nên hình lấp gần kín khung, đặt ở "${s.place}" sẽ nhìn gần như căn giữa. `
+      + `Giảm cỡ xuống thì mới thấy hình dịch vào góc, ví dụ 26% cho một bản in nhỏ.`
+    : "";
 }
 
 function remember() {
@@ -255,8 +273,9 @@ $("#run").onclick = () => run(state.pick ? [state.pick] : []).catch(e => $("#msg
 $("#runall").onclick = () => run(state.images.filter(i => i.waiting).map(i => i.name))
   .catch(e => $("#msg").textContent = e.message);
 $("#bgpick").onchange = paintBg;
-for (const f of FLAGS) $("#" + f).onchange = () => {
+for (const f of FLAGS) $("#" + f).oninput = $("#" + f).onchange = () => {
   remember();
+  hint();
   loadList();
   if (state.pick) $("#msg").textContent = "Cờ đã đổi cho ảnh này, bấm Chạy để áp dụng.";
 };
