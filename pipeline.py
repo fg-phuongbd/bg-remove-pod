@@ -29,6 +29,7 @@ DPI = 300
 DEFAULT_SIZE = "4500x5100"  # px; Printful/Merch-style print file (38.1 x 43.2 cm at 300 DPI)
 REMBG_MODEL = "birefnet-general"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+SOLID_SHARE = 0.5  # share of same-colored neighbours that makes a pixel part of a flat area
 KEY_FLOOR = 32.0  # default for --floor: colors closer than this to the background are shirt, not ink
 MERGE_DELTA_E = 12.0  # default for --merge: palette colors closer than this (CIELAB) are always merged
 VTRACER_OPTS = dict(
@@ -493,16 +494,57 @@ def key_color(img: Image.Image, soft: float = 60.0, floor: float = KEY_FLOOR) ->
     return Image.fromarray(out, "RGBA")
 
 
+def solid_areas(img: Image.Image, ink: np.ndarray, tol: int = 14,
+                share: float = SOLID_SHARE, scale: int = 768) -> np.ndarray:
+    """Weight in [0, 1] per pixel: is this an area of one flat color, or part of a fade?
+
+    Asked as "how much of the neighbourhood is the same color as me". An area of solid ink
+    answers with most of its window; a glow or an airbrushed shadow answers with the thin band
+    of its own step in the ramp, and photographic shading with less still. On one mixed design
+    the three come out at 0.64, 0.17 and 0.31. Measured on a thumbnail, with a window sized to
+    the picture rather than to pixels -- the question is about areas, and a window wider than
+    the strokes it lands on would only ever see their background. Then grown a little so the
+    edge of a solid area counts with its interior, and feathered so alpha never steps.
+
+    `ink` marks the pixels the key found something at, well clear of the background: background
+    is the largest flat area of all and must stay keyed away."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    im = img.convert("RGB").copy()
+    im.thumbnail((scale, scale))
+    a = np.asarray(im).astype(np.int16)
+    h, w = a.shape[:2]
+    win = max(5, round(max(h, w) * 0.015) | 1)
+    r = win // 2
+    pad = np.pad(a, ((r, r), (r, r), (0, 0)), mode="edge")
+    count = np.zeros((h, w), np.int16)
+    for dy in range(win):
+        for dx in range(win):
+            count += np.abs(pad[dy:dy + h, dx:dx + w] - a).max(axis=2) <= tol
+    mask = np.asarray(Image.fromarray((ink * 255).astype(np.uint8), "L").resize((w, h), Image.Resampling.BILINEAR)) >= 128
+    solid = (count >= round(share * win * win)) & mask
+    # r reaches the edge of a flat area, whose own window straddled the boundary and so failed
+    # the test; keep stops at the ink's own anti-aliased rim, so no shape grows.
+    keep = ndimage.binary_dilation(mask, iterations=2)
+    weight = ndimage.binary_dilation(solid, iterations=r) & keep
+    # No blur: scaling the thumbnail back up is the feather, and a blur here would pull the
+    # weight below 1 inside anything narrower than its own radius -- exactly the thin lettering
+    # this is meant to fill in.
+    up = Image.fromarray((weight * 255).astype(np.uint8), "L").resize(img.size, Image.Resampling.BILINEAR)
+    return np.asarray(up).astype(np.float32) / 255.0
+
+
 def bg_rgb(img: Image.Image, bg: str) -> tuple[int, int, int]:
     """The color key_bg solves against, i.e. the shirt color the result is meant to be printed on."""
     return {"black": (0, 0, 0), "white": (255, 255, 255)}.get(bg) or bg_color(img)
 
 
-def key_bg(img: Image.Image, bg: str, floor: float = KEY_FLOOR) -> Image.Image:
+def key_bg(img: Image.Image, bg: str, floor: float = KEY_FLOOR, solid: bool = True) -> Image.Image:
     """Turn a black (or white) background into transparency the way dark-shirt printers do.
 
     black: alpha = max(R,G,B) mapped from the background level to 255, color un-premultiplied
-    (c / alpha) so that printing the result on a black shirt reproduces the original exactly.
+    so that printing the result on a black shirt reproduces the original exactly. `solid` then
+    lifts flat areas of ink to full alpha (see solid_areas), which the fades are not.
     Glows and airbrush fade naturally into the shirt. Design pixels that are truly black
     become transparent too, which is correct: the shirt is black.
     white: the mirror image (alpha = 255 - min(R,G,B)), for white shirts.
@@ -513,15 +555,20 @@ def key_bg(img: Image.Image, bg: str, floor: float = KEY_FLOOR) -> Image.Image:
     if bg == "color":
         return key_color(img, floor=floor)
     rgb = np.asarray(img.convert("RGB")).astype(np.float32)
-    if bg == "white":
-        rgb = 255.0 - rgb  # solve as black, then invert the colors back
-    key = rgb.max(axis=2)
+    shirt = np.array(bg_rgb(img, bg), dtype=np.float32)
+    key = rgb.max(axis=2) if bg == "black" else 255.0 - rgb.min(axis=2)
     lo = float(np.percentile(_border_ring(key), 99)) + 6.0  # just above the background's noise ceiling
     alpha = np.clip((key - lo) / (255.0 - lo), 0.0, 1.0)
-    safe = np.where(alpha > 0, alpha, 1.0)
-    color = np.clip(rgb / safe[:, :, None], 0, 255)  # un-premultiply: color * alpha == original
-    if bg == "white":
-        color = 255.0 - color
+    if solid:
+        # A solid area of ink is not a fade, so it has no business being see-through: a red at
+        # (195, 20, 25) would otherwise print at 76 % coverage and read thin on the fabric.
+        # Raising alpha is always safe -- color is re-solved below at whatever alpha it ends up
+        # with, so the result on a shirt of the background color does not move -- and it can only
+        # bring color further inside the gamut, never outside.
+        lift = solid_areas(img, key > lo + floor)
+        alpha = np.maximum(alpha, np.where(alpha > 0, lift, 0.0))  # may lift ink, never create it
+    a = alpha[:, :, None]
+    color = np.clip((rgb - (1.0 - a) * shirt) / np.where(a > 0, a, 1.0), 0, 255)
     out = np.dstack([color, alpha * 255.0]).round().astype(np.uint8)
     return Image.fromarray(out, "RGBA")
 

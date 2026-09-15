@@ -1,5 +1,5 @@
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 import pipeline
 
@@ -43,14 +43,39 @@ def test_key_black_reproduces_original_on_black():
     out = pipeline.key_bg(im, "black")
     assert out.getpixel((10, 10))[3] == 0                    # background gone
     assert out.getpixel((100, 100)) == (255, 255, 255, 255)  # white stays
+    assert out.getpixel((210, 100)) == (128, 128, 128, 255)  # a flat grey block is solid ink
+    assert out.getpixel((100, 210)) == (0, 120, 200, 255)    # so is a flat blue one
+    # compositing the result on black gives back the original color (within rounding + lo offset)
+    comp = np.asarray(out).astype(float)
+    back = comp[:, :, :3] * comp[:, :, 3:] / 255.0
+    assert np.abs(back[210, 100] - [0, 120, 200]).max() < 16  # numpy is [y, x]: the blue block
+    assert np.abs(back[100, 210] - [128, 128, 128]).max() < 16  # and here the grey one
+
+
+def test_key_black_without_solid_lift_is_the_plain_brightness_key():
+    out = pipeline.key_bg(_dark_art(), "black", solid=False)
     r, g, b, a = out.getpixel((210, 100))                    # grey -> white at ~half alpha
     assert (r, g, b) == (255, 255, 255) and 100 < a < 150
     r, g, b, a = out.getpixel((100, 210))                    # blue: un-premultiplied, max channel 255
     assert b == 255 and a > 180
-    # compositing the result on black gives back the original color (within rounding + lo offset)
+
+
+def test_key_black_leaves_a_fade_thinning_into_the_shirt():
+    """A glow is not a flat area: its alpha must keep following brightness, or it prints as a
+    solid halo instead of dissolving into the shirt."""
+    im = Image.new("RGB", (300, 300), (0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.ellipse((120, 120, 180, 180), fill=(60, 90, 255))      # core
+    im = im.filter(ImageFilter.GaussianBlur(30))             # ...and its glow
+    d = ImageDraw.Draw(im)
+    d.rectangle((20, 20, 80, 80), fill=(60, 90, 255))        # a flat block of the same color
+    out = pipeline.key_bg(im, "black")
+    assert out.getpixel((50, 50)) == (60, 90, 255, 255)      # the block: solid ink
+    a_mid = out.getpixel((150, 205))[3]                      # out in the glow, well off the core
+    assert 0 < a_mid < 200, a_mid                            # still a fade, not lifted to opaque
     comp = np.asarray(out).astype(float)
     back = comp[:, :, :3] * comp[:, :, 3:] / 255.0
-    assert np.abs(back[210, 100] - [0, 120, 200]).max() < 16  # numpy is [y, x]
+    assert np.abs(back - np.asarray(im).astype(float)).max() < 16
 
 
 def test_key_white_mirror():

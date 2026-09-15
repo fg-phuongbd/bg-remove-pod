@@ -125,7 +125,18 @@ chỗ tối mỏng dần rồi tan vào áo. Với **đồ họa phẳng** màu 
 
 Nên pipeline đo ảnh gốc trước khi key. Nếu gần như mọi pixel mực nằm trong mảng màu đều thì đó là đồ
 họa phẳng, và nền được key theo **khoảng cách màu** thay vì độ sáng, cho màu khối đặc hoàn toàn. Còn
-lại giữ key độ sáng. Dòng log in ra `cách: key khoảng cách màu` hay `cách: key nền đen` để bạn biết
+lại giữ key độ sáng.
+
+Ngay trong key độ sáng cũng có một lớp nữa: **mảng màu khối được nâng lên đặc**. Với mỗi pixel,
+pipeline hỏi bao nhiêu phần lân cận có cùng màu với nó. Mảng mực khối trả lời gần hết cửa sổ, dốc
+glow chỉ trả lời đúng dải mỏng của bậc nó đang đứng, còn bóng đổ trong ảnh chụp thì ít hơn nữa. Trên
+một thiết kế pha trộn, ba con số đó là 0,64, 0,17 và 0,31. Chỗ nào vượt ngưỡng thì alpha lên 255,
+chỗ nào không thì giữ nguyên dốc theo độ sáng.
+
+Nhờ vậy thiết kế **pha trộn**, tức ảnh chụp cộng chữ đồ họa, không cần cờ nào: chữ đỏ `(195, 20, 25)`
+ra đặc thay vì 76%, còn glow và bóng đổ vẫn tan vào áo. Việc nâng alpha không bao giờ đổi kết quả in,
+vì màu được giải lại theo alpha mới; nó cũng không tạo mực ở chỗ vốn trong suốt. Đo trên 10 ảnh nền
+đen: tỉ lệ pixel đặc từ 21,2% lên 61,4%, sai số khi in giảm từ 1,10 xuống 0,94 mức trên 255. Dòng log in ra `cách: key khoảng cách màu` hay `cách: key nền đen` để bạn biết
 nó chọn gì. Ép tay bằng `--bg black` hoặc `--bg color` nếu nhận diện sai.
 
 Phép đo này khắt khe hơn `kiểu: flat/detail` ở cùng dòng log, vì cái đó chỉ dùng để chọn model
