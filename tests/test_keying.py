@@ -326,3 +326,17 @@ def test_solid_lift_keeps_the_anti_aliased_edge():
     a_out = np.asarray(out)[:, :, 3]
     assert (a_out > 0).sum() == (a_plain > 0).sum()          # no ink invented anywhere
     assert not ((a_plain <= 8) & (a_out > 200)).any()        # nothing faint jumped to opaque
+
+
+def test_redundant_ink_counts_only_opaque_pixels_that_match_the_shirt():
+    bg = (0, 0, 0)
+    a = np.zeros((100, 100, 4), np.uint8)
+    a[10:40, :, 3] = 255                      # đục và đen: in đè lên áo đen, vô ích
+    a[40:70, :, :3] = 255
+    a[40:70, :, 3] = 255                      # đục và trắng: mực thật
+    a[70:90, :, 3] = 50                       # mờ và đen: key vốn để cho áo hiện ra, không tính
+    img = Image.fromarray(a, "RGBA")
+    share = pipeline.redundant_ink(img, Image.new("RGB", (100, 100)), bg)
+    assert 36 < share < 39, share             # 3000 trên 8000 pixel có mực
+    assert pipeline.redundant_ink(Image.new("RGBA", (10, 10), (0, 0, 0, 0)),
+                                  Image.new("RGB", (10, 10)), bg) == 0.0

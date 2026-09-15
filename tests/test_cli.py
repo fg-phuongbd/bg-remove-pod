@@ -1,6 +1,7 @@
 import shutil
 from pathlib import Path
 
+import numpy as np
 import pytest
 from PIL import Image
 
@@ -32,12 +33,12 @@ def test_main_batch_isolates_failures(tmp_path, monkeypatch, red_circle):
     rc = pipeline.main(["--vector", "--size", "1181x1000"])
 
     assert rc == 1
-    out = Image.open(pipeline.OUTPUT_DIR / "ok.png")
+    out = Image.open(pipeline.OUTPUT_DIR / "ok_1181x1000_center.png")
     assert out.size == (1181, 1000)
     assert round(out.info["dpi"][0]) == 300
     assert (pipeline.INPUT_DIR / "done" / "ok.png").exists()
     assert (pipeline.INPUT_DIR / "failed" / "bad.png").exists()
-    assert (pipeline.REVIEW_DIR / "ok.png").exists()
+    assert (pipeline.REVIEW_DIR / "ok_1181x1000_center.png").exists()
     assert not (pipeline.INPUT_DIR / "ok.png").exists()
 
 
@@ -84,8 +85,8 @@ def test_main_keyed_black_art_makes_review_on_shirt(tmp_path, monkeypatch):
 
     assert pipeline.main(["--size", "400x400"]) == 0  # auto: black bg -> keyed for a dark shirt
 
-    assert (pipeline.OUTPUT_DIR / "dark.png").exists()
-    review = Image.open(pipeline.REVIEW_DIR / "dark.png").convert("RGB")
+    assert (pipeline.OUTPUT_DIR / "dark_400x400_center.png").exists()
+    review = Image.open(pipeline.REVIEW_DIR / "dark_400x400_center.png").convert("RGB")
     assert review.getpixel((review.width - 3, 3)) == (20, 20, 22)  # result shown on the dark shirt color
 
 
@@ -104,3 +105,65 @@ def test_parse_args_placement_defaults():
     assert (a.place, a.scale, a.margin) == ("center", 100.0, 2.0)
     b = pipeline.parse_args(["--place", "top-right", "--scale", "26"])
     assert (b.place, b.scale) == ("top-right", 26.0)
+
+
+def test_out_name_carries_canvas_and_placement():
+    n = pipeline.out_name
+    assert n("skull", (4500, 5100), "center", 100.0) == "skull_4500x5100_center.png"
+    assert n("skull", (4500, 5100), "top-right", 26.0) == "skull_4500x5100_top-right_26pc.png"
+    # cùng một góc, hai cỡ khác nhau thì không đè lên nhau
+    assert n("skull", (4500, 5100), "top-right", 40.0) != n("skull", (4500, 5100), "top-right", 26.0)
+
+
+def test_parse_args_fill_limit():
+    assert pipeline.parse_args([]).fill_limit == pipeline.FILL_LIMIT
+    assert pipeline.parse_args(["--fill-limit", "100"]).fill_limit == 100.0
+
+
+def _poster_on_black(path):
+    """Poster: hình sáng rải rác trên nền đen, có quầng sáng mờ giữa chúng.
+
+    Quầng đó là thứ làm chốt chặn cần thiết: nó nằm trên ngưỡng nhiễu nên key để lại alpha nhỏ,
+    thoát khỏi các chốt sẵn có trong solid_core, rồi bị tô thành mực đen đặc. Nền đen tuyệt đối
+    thì solid_core đã tự chặn được."""
+    from PIL import ImageDraw, ImageFilter
+    im = Image.new("RGB", (240, 240), (0, 0, 0))
+    d = ImageDraw.Draw(im)
+    for box in ((20, 20, 90, 60), (150, 20, 220, 60), (20, 180, 220, 220)):
+        d.rectangle(box, fill=(240, 240, 240))
+    glow = Image.new("L", (240, 240), 0)
+    ImageDraw.Draw(glow).rectangle((30, 30, 210, 210), fill=255)
+    g = np.asarray(glow.filter(ImageFilter.GaussianBlur(28))).astype(float) / 255.0
+    a = np.asarray(im).astype(float) + g[:, :, None] * np.array([16, 14, 20])
+    a[:6] = a[-6:] = 0
+    a[:, :6] = a[:, -6:] = 0                       # vành biên vẫn đen tuyệt đối để đo đúng nhiễu nền
+    Image.fromarray(a.round().clip(0, 255).astype(np.uint8), "RGB").save(path)
+
+
+def test_fill_holes_is_skipped_when_it_would_print_over_the_shirt(tmp_path, monkeypatch, capsys):
+    """Model cắt hình coi cả tấm poster là một khối; tô đặc sẽ biến nền đen thành mực đen."""
+    for name, attr in (("input", "INPUT_DIR"), ("output", "OUTPUT_DIR"),
+                       ("work", "WORK_DIR"), ("review", "REVIEW_DIR")):
+        d = tmp_path / name
+        d.mkdir()
+        monkeypatch.setattr(pipeline, attr, d)
+    monkeypatch.setattr(pipeline, "check_tools", lambda: None)
+    monkeypatch.setattr(pipeline, "upscale", lambda img, scale=4, model="": img)
+    # silhouette phủ kín tấm ảnh, đúng như model làm với poster
+    monkeypatch.setattr(pipeline, "remove_bg",
+                        lambda img: Image.new("RGBA", img.size, (255, 255, 255, 255)))
+    src = tmp_path / "input" / "poster.png"
+    _poster_on_black(src)
+
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--fill-holes",
+                          "--bg", "black", str(src)]) == 0
+    log = capsys.readouterr().out
+    assert "BỎ QUA --fill-holes" in log
+    assert "thân hình đặc" not in log            # dòng log phải nói đúng việc đã làm
+    out = np.asarray(Image.open(tmp_path / "output" / "poster_240x240_center.png"))
+    gap = out[110:160, 110:130, 3]               # khoảng đen giữa các hình
+    assert gap.max() < 40, "nền giữa các chi tiết phải để cho áo hiện ra"
+
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--fill-holes", "--bg", "black",
+                          "--fill-limit", "100", str(src)]) == 0
+    assert "BỎ QUA" not in capsys.readouterr().out   # tắt chốt chặn thì vẫn tô như cũ

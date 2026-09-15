@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -29,6 +30,7 @@ DPI = 300
 DEFAULT_SIZE = "4500x5100"  # px; Printful/Merch-style print file (38.1 x 43.2 cm at 300 DPI)
 REMBG_MODEL = "birefnet-general"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+FILL_LIMIT = 20.0  # --fill-holes bị bỏ qua nếu nó thêm quá ngần này phần trăm mực trùng màu áo
 SOLID_SHARE = 0.5  # share of same-colored neighbours that makes a pixel part of a flat area
 KEY_FLOOR = 32.0  # default for --floor: colors closer than this to the background are shirt, not ink
 MERGE_DELTA_E = 12.0  # default for --merge: palette colors closer than this (CIELAB) are always merged
@@ -43,6 +45,15 @@ class EmptyResult(Exception):
 
 
 # ---------------------------------------------------------------- geometry
+def out_name(stem: str, box: tuple[int, int], place: str, scale: float) -> str:
+    """Tên file in: tên ảnh, khung in, vị trí, và cỡ nếu không phải 100%.
+
+    Cỡ chỉ xuất hiện khi khác 100 để tên mặc định vẫn gọn (`name_4500x5100_center.png`), nhưng
+    hai bản in nhỏ cùng một góc mà khác cỡ thì không đè lên nhau."""
+    tail = "" if scale == 100.0 else f"_{scale:g}pc"
+    return f"{stem}_{box[0]}x{box[1]}_{place}{tail}.png"
+
+
 def target_box_px(size: str) -> tuple[int, int]:
     """'4500x5100' -> pixels as given; '30x40' (values < 200 are cm) -> (3543, 4724) at 300 DPI."""
     def num(tok: str) -> float:
@@ -617,6 +628,23 @@ def key_bg(img: Image.Image, bg: str, floor: float = KEY_FLOOR, solid: bool = Tr
     return Image.fromarray(out, "RGBA")
 
 
+def redundant_ink(keyed: Image.Image, original: Image.Image, bg: tuple[int, int, int]) -> float:
+    """Tỉ lệ mực đục nhưng in ra trùng màu áo, trên tổng diện tích mực.
+
+    Đây là chỗ máy in phủ lót trắng rồi in đè lên vải cùng màu: vừa phí vừa nổi rõ thành mảng
+    trên áo. Dùng để bắt trường hợp bật --fill-holes nhầm cho một tấm poster, khi model cắt hình
+    coi cả tấm là một khối và lấp luôn nền đen giữa các chi tiết."""
+    a = np.asarray(keyed.convert("RGBA")).astype(np.float32)
+    alpha = a[:, :, 3]
+    ink = alpha > 0
+    if not ink.any():
+        return 0.0
+    w = (alpha / 255.0)[:, :, None]
+    on_shirt = a[:, :, :3] * w + np.array(bg, dtype=np.float32) * (1 - w)
+    wasted = (alpha > 200) & (np.linalg.norm(on_shirt - np.array(bg, dtype=np.float32), axis=2) < 30)
+    return 100.0 * float(wasted.sum()) / float(ink.sum())
+
+
 def solid_core(keyed: Image.Image, original: Image.Image, silhouette: Image.Image,
                bg: tuple[int, int, int], band: float = 0.001, thin: float = 0.006) -> Image.Image:
     """--fill-holes on the key path: cover the figure solidly, keep the key everywhere else.
@@ -701,15 +729,17 @@ def _palette_size(rgba: np.ndarray, cover: float = 0.95) -> int:
 
 # ---------------------------------------------------------------- background
 _SESSION = None
+_SESSION_LOCK = threading.Lock()  # trang có thể chạy nhiều ảnh cùng lúc; model chỉ nạp một lần
 
 
 def remove_bg(img: Image.Image) -> Image.Image:
     global _SESSION
     import rembg  # heavy import kept local
 
-    if _SESSION is None:
-        print(f"  Nạp model {REMBG_MODEL} (lần đầu sẽ tải ~900 MB về ~/.rembg/models/)...")
-        _SESSION = rembg.new_session(REMBG_MODEL)
+    with _SESSION_LOCK:
+        if _SESSION is None:
+            print(f"  Nạp model {REMBG_MODEL} (lần đầu sẽ tải ~900 MB về ~/.rembg/models/)...")
+            _SESSION = rembg.new_session(REMBG_MODEL)
     return rembg.remove(img.convert("RGBA"), session=_SESSION, alpha_matting=False).convert("RGBA")
 
 
@@ -825,6 +855,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
 
     kind = detect_bg(original)
     bg, refine = choose_mode(args, kind)
+    filled_in = False  # --fill-holes có thực sự được áp dụng không, để dòng log nói đúng
     if bg == "none":
         cut = crop_to_content(original)
         shirt = None
@@ -836,6 +867,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             no_bg = decontaminate(no_bg, bg_color(original))
         if args.fill_holes:
             no_bg = fill_holes(no_bg, original)
+            filled_in = True
         cut = crop_to_content(no_bg)
         shirt = None
     else:
@@ -844,7 +876,19 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             bg = key_style(bg, is_flat_art(original))  # flat art: distance, not brightness
         keyed = key_bg(original, bg, args.floor)
         if silhouette:
-            keyed = solid_core(keyed, original, silhouette, bg_rgb(original, bg))
+            filled = solid_core(keyed, original, silhouette, bg_rgb(original, bg))
+            # Trên một tấm poster, model cắt hình coi cả tấm là một khối và lấp luôn nền giữa các
+            # chi tiết; mực đó in ra trùng màu áo. Đo đúng điều ấy và bỏ qua nếu vượt ngưỡng, để
+            # bật nhầm cờ không làm hỏng file. Ảnh có người thật chỉ tăng 5-11%, poster tăng 27-60%.
+            added = redundant_ink(filled, original, bg_rgb(original, bg)) - \
+                redundant_ink(keyed, original, bg_rgb(original, bg))
+            if added > args.fill_limit:
+                print(f"  BỎ QUA --fill-holes: tô đặc sẽ thêm {added:.0f}% mực in đè lên áo cùng màu "
+                      f"(ngưỡng {args.fill_limit:g}%). Cờ này dành cho ảnh có người, không dành cho poster.")
+                silhouette = None
+            else:
+                keyed = filled
+                filled_in = True
         cut = crop_to_content(keyed, min_alpha=40)
         shirt = {"black": (20, 20, 22), "white": (245, 245, 245)}.get(kind) or bg_color(original)
     cut.save(WORK_DIR / f"{src.stem}-cut.png")
@@ -855,7 +899,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     how = {"none": "đã trong suốt", "ai": "cắt hình" + (" + tinh chỉnh viền" if refine else ""),
            "black": "key nền đen", "white": "key nền trắng",
            "color": "key khoảng cách màu" if kind in ("black", "white") else "key màu nền"}[bg]
-    how += (" + thân hình đặc" if bg not in ("ai", "none") else " + lấp lỗ") if args.fill_holes and bg != "none" else ""
+    how += (" + thân hình đặc" if bg != "ai" else " + lấp lỗ") if filled_in else ""
     shirt_txt = "" if bg == "none" else f" | áo: {SHIRT_LABEL['same' if bg != 'ai' else 'other']}"
     place_txt = "" if args.place == "center" and args.scale == 100.0 else f" | đặt: {args.place} {args.scale:g}%"
     print(f"  nền: {kind}{shirt_txt} | cách: {how} | kiểu: {style} | {'vector' if args.vector else 'raster'}{place_txt}"
@@ -885,9 +929,10 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             result = flatten_raster(result, colors, args.merge)
 
     result = place_on_canvas(result, box, args.place, args.margin)
-    out_path = OUTPUT_DIR / f"{src.stem}.png"
+    name = out_name(src.stem, box, args.place, args.scale)
+    out_path = OUTPUT_DIR / name
     save_print_png(result, out_path)
-    make_review(original, result, REVIEW_DIR / f"{src.stem}.png", shirt=shirt)
+    make_review(original, result, REVIEW_DIR / name, shirt=shirt)
     return out_path
 
 
@@ -932,6 +977,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="gom về tối đa N màu. Mặc định: 12 khi --vector, không gom khi raster. 0 = không gom")
     p.add_argument("--merge", type=float, default=MERGE_DELTA_E,
                    help=f"ngưỡng gộp màu gần nhau (CIELAB ΔE, mặc định {MERGE_DELTA_E:g}). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác nhau bị gộp")
+    p.add_argument("--fill-limit", type=float, default=FILL_LIMIT,
+                   help=f"ngưỡng an toàn cho --fill-holes: nếu tô đặc làm tăng quá ngần này phần trăm mực in đè lên "
+                        f"áo cùng màu thì bỏ qua và cảnh báo. Mặc định {FILL_LIMIT:g}. 100 = tắt chốt chặn")
     p.add_argument("--margin", type=float, default=2.0,
                    help="khoảng cách từ mép khung tới thiết kế khi --place không phải center, tính theo phần trăm cạnh ngắn. Mặc định 2")
     p.add_argument("--floor", type=float, default=KEY_FLOOR,
