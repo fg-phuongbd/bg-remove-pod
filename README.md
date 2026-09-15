@@ -155,6 +155,23 @@ tính xong dốc alpha nên mép chữ và màu viền không đổi. Trên thi�
 tích xuống 0,5%. Đổi lại, chi tiết gần đen thật sự cũng mất, lệch nhiều nhất 31 mức trên 255, mức này
 mắt không thấy trên vải đen. Đặt `--floor 0` để tắt.
 
+## Đặt hình nhỏ trên khung in: `--place` và `--scale`
+
+Mặc định thiết kế được phóng lấp đầy khung in rồi căn giữa. Với bản in nhỏ, ví dụ một hình ở góc
+trên lưng áo hay in ngực trái, dùng hai cờ này:
+
+```bash
+./run.sh --place top-right --scale 26
+./run.sh --place center --scale 40 --size 30x40
+```
+
+`--scale` là phần trăm của **cả khung**, không phải của chiều rộng, nên con số có ý nghĩa như nhau
+với hình ngang hay hình dọc: 26% của khung 4500 x 5100 là hộp 1170 x 1326, hình ngang dùng hết chiều
+rộng hộp đó còn hình dọc dùng hết chiều cao.
+
+`--margin` là khoảng hở từ mép khung, mặc định 2% cạnh ngắn, chỉ có tác dụng khi `--place` khác
+`center`. Hình căn giữa thì không bao giờ chạm tới nó.
+
 ## Lưu ý về file in cho áo tối
 
 Với ảnh nền đen, file ra có nhiều vùng **bán trong suốt** (glow, airbrush, vùng tối). Đây là cách

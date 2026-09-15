@@ -97,3 +97,10 @@ def test_key_style_picks_distance_for_flat_art():
     assert k("white", False) == "white"
     assert k("color", True) == "color"    # already the distance key
     assert k("color", False) == "color"
+
+
+def test_parse_args_placement_defaults():
+    a = pipeline.parse_args([])
+    assert (a.place, a.scale, a.margin) == ("center", 100.0, 2.0)
+    b = pipeline.parse_args(["--place", "top-right", "--scale", "26"])
+    assert (b.place, b.scale) == ("top-right", 26.0)

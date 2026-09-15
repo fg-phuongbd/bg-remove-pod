@@ -57,10 +57,44 @@ def target_box_px(size: str) -> tuple[int, int]:
     return round(w / 2.54 * DPI), round(h / 2.54 * DPI)
 
 
-def place_on_canvas(img: Image.Image, box: tuple[int, int]) -> Image.Image:
-    """Center img on a transparent canvas of exactly box size (img must already fit)."""
+PLACES = ("center", "top", "bottom", "left", "right",
+          "top-left", "top-right", "bottom-left", "bottom-right")
+
+
+def art_box(box: tuple[int, int], scale: float) -> tuple[int, int]:
+    """The box the design itself is fitted into: `scale` per cent of the print canvas, both ways.
+
+    Fitting into a scaled copy of the canvas rather than to a width keeps the design's own
+    proportions and makes the number mean the same thing whatever shape the design is: a chest
+    print at 26 % of a 4500 x 5100 canvas lands in 1170 x 1326, and a wide design uses the width
+    of that while a tall one uses the height."""
+    w, h = box
+    return max(1, round(w * scale / 100.0)), max(1, round(h * scale / 100.0))
+
+
+def place_on_canvas(img: Image.Image, box: tuple[int, int], place: str = "center",
+                    margin: float = 2.0) -> Image.Image:
+    """Put the design on a transparent canvas of exactly box size, anchored where asked.
+
+    `margin` is per cent of the short side and is the gap from the edges the design is pushed
+    against, so a corner print does not sit flush against the trim. A centered design is centered
+    and never sees it -- which is what a full-size print wants, and what this did before."""
     canvas = Image.new("RGBA", box, (0, 0, 0, 0))
-    canvas.paste(img, ((box[0] - img.width) // 2, (box[1] - img.height) // 2))
+    m = round(min(box) * margin / 100.0)
+    where = place.split("-") if place != "center" else []
+    if "left" in where:
+        x = m
+    elif "right" in where:
+        x = box[0] - m - img.width
+    else:
+        x = (box[0] - img.width) // 2
+    if "top" in where:
+        y = m
+    elif "bottom" in where:
+        y = box[1] - m - img.height
+    else:
+        y = (box[1] - img.height) // 2
+    canvas.paste(img, (max(0, x), max(0, y)))
     return canvas
 
 
@@ -783,6 +817,7 @@ def make_review(original: Image.Image, result: Image.Image, path: Path, height: 
 # ---------------------------------------------------------------- pipeline
 def process_one(src: Path, args: argparse.Namespace) -> Path:
     box = target_box_px(args.size)
+    inner = art_box(box, args.scale)
     original = Image.open(src)
     original.load()
     original = original.convert("RGBA")
@@ -822,7 +857,8 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
            "color": "key khoảng cách màu" if kind in ("black", "white") else "key màu nền"}[bg]
     how += (" + thân hình đặc" if bg not in ("ai", "none") else " + lấp lỗ") if args.fill_holes and bg != "none" else ""
     shirt_txt = "" if bg == "none" else f" | áo: {SHIRT_LABEL['same' if bg != 'ai' else 'other']}"
-    print(f"  nền: {kind}{shirt_txt} | cách: {how} | kiểu: {style} | {'vector' if args.vector else 'raster'}"
+    place_txt = "" if args.place == "center" and args.scale == 100.0 else f" | đặt: {args.place} {args.scale:g}%"
+    print(f"  nền: {kind}{shirt_txt} | cách: {how} | kiểu: {style} | {'vector' if args.vector else 'raster'}{place_txt}"
           f"{f', gom {colors} màu' if colors else ', giữ nguyên màu'}")
 
     if args.vector:
@@ -831,10 +867,10 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         q.save(q_path)
         svg_path = WORK_DIR / f"{src.stem}.svg"
         trace_svg(q_path, svg_path)
-        result = render_svg(svg_path, box)
+        result = render_svg(svg_path, inner)
     elif bg in ("ai", "none"):
         big = upscale(cut, model=model)
-        big = big.resize(fit_box(*big.size, box), Image.Resampling.LANCZOS)
+        big = big.resize(fit_box(*big.size, inner), Image.Resampling.LANCZOS)
         result = flatten_raster(big, colors, args.merge) if colors else tighten_alpha(big)
     else:
         # keyed background: upscale the flat RGB first (cleaner edges, denoised background),
@@ -844,11 +880,11 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         if silhouette:
             keyed = solid_core(keyed, big_rgb, silhouette, bg_rgb(big_rgb, bg))
         keyed = crop_to_content(keyed, min_alpha=40)
-        result = keyed.resize(fit_box(*keyed.size, box), Image.Resampling.LANCZOS)
+        result = keyed.resize(fit_box(*keyed.size, inner), Image.Resampling.LANCZOS)
         if colors:
             result = flatten_raster(result, colors, args.merge)
 
-    result = place_on_canvas(result, box)
+    result = place_on_canvas(result, box, args.place, args.margin)
     out_path = OUTPUT_DIR / f"{src.stem}.png"
     save_print_png(result, out_path)
     make_review(original, result, REVIEW_DIR / f"{src.stem}.png", shirt=shirt)
@@ -878,6 +914,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                             "auto = nền đen coi là áo đen, còn lại coi là áo khác màu")
     daily.add_argument("--size", default=DEFAULT_SIZE,
                        help=f"kích thước file in, dạng WxH: pixel (vd 4500x5100) hoặc cm nếu số nhỏ hơn 200 (vd 30x40). Mặc định {DEFAULT_SIZE}")
+    daily.add_argument("--place", choices=PLACES, default="center",
+                       help="đặt thiết kế ở đâu trên khung in. Mặc định center. Dùng kèm --scale khi in hình nhỏ, "
+                            "ví dụ --place top-right --scale 26 cho một hình nhỏ góc trên phải")
+    daily.add_argument("--scale", type=float, default=100.0,
+                       help="thiết kế chiếm bao nhiêu phần trăm khung in, giữ nguyên tỉ lệ hình. Mặc định 100 = lấp đầy khung")
     daily.add_argument("--vector", action="store_true",
                        help="minh họa phẳng: gom màu rồi trace vector (mảng màu tuyệt đối phẳng, viền cong mượt). Mặc định là raster: upscale AI, giữ nguyên màu")
     daily.add_argument("files", nargs="*", help="chỉ xử lý các file này thay cho cả input/")
@@ -889,6 +930,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="gom về tối đa N màu. Mặc định: 12 khi --vector, không gom khi raster. 0 = không gom")
     p.add_argument("--merge", type=float, default=MERGE_DELTA_E,
                    help=f"ngưỡng gộp màu gần nhau (CIELAB ΔE, mặc định {MERGE_DELTA_E:g}). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác nhau bị gộp")
+    p.add_argument("--margin", type=float, default=2.0,
+                   help="khoảng cách từ mép khung tới thiết kế khi --place không phải center, tính theo phần trăm cạnh ngắn. Mặc định 2")
     p.add_argument("--floor", type=float, default=KEY_FLOOR,
                    help=f"key màu nền: màu cách nền dưới ngưỡng này (khoảng cách RGB) coi như màu áo, cho trong suốt hẳn. "
                         f"Mặc định {KEY_FLOOR:g}, dập quầng xám mà máy in vẫn phủ lót trắng. 0 = tắt")

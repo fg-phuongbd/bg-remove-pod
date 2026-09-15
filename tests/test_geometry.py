@@ -99,3 +99,33 @@ def test_refine_edge_does_not_grow_model_holes():
     assert out[300, 245] == 255      # body right next to the gap keeps full alpha (hole not grown)
     assert out[412, 300] == 0        # the slit stays open too: core feather must not leak across it
     assert out[100, 100] == 255 and out[10, 10] == 0
+
+
+def test_art_box_scales_the_canvas_both_ways():
+    assert pipeline.art_box((4500, 5100), 100) == (4500, 5100)
+    assert pipeline.art_box((4500, 5100), 26) == (1170, 1326)   # the placement in a real print file
+    assert pipeline.art_box((4500, 5100), 0.01) == (1, 1)       # never degenerate
+
+
+def test_place_on_canvas_anchors_with_a_margin(red_square):
+    box = (1000, 1200)
+    art = red_square.crop(red_square.getbbox())                 # 100 x 100
+    m = round(min(box) * 0.02)                                  # default margin: 2 % of short side
+
+    def corner(placed):
+        ys, xs = np.nonzero(np.asarray(placed)[:, :, 3] > 0)
+        return xs.min(), ys.min(), xs.max(), ys.max()
+
+    assert corner(pipeline.place_on_canvas(art, box)) == (450, 550, 549, 649)   # centered as before
+    assert corner(pipeline.place_on_canvas(art, box, "top-right")) == (
+        box[0] - m - 100, m, box[0] - m - 1, m + 99)
+    assert corner(pipeline.place_on_canvas(art, box, "bottom-left")) == (
+        m, box[1] - m - 100, m + 99, box[1] - m - 1)
+    assert corner(pipeline.place_on_canvas(art, box, "top")) == (450, m, 549, m + 99)  # centered across
+    assert pipeline.place_on_canvas(art, box, "top-right").size == box
+
+
+def test_place_on_canvas_margin_is_configurable(red_square):
+    art = red_square.crop(red_square.getbbox())
+    tight = pipeline.place_on_canvas(art, (1000, 1200), "top-left", margin=0.0)
+    assert np.asarray(tight)[0, 0, 3] > 0                       # flush into the corner
