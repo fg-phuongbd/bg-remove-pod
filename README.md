@@ -18,17 +18,33 @@ về `~/.rembg/models/`.
 
 ## Dùng hằng ngày
 
-1. Thả ảnh (png, jpg, webp) vào `input/`.
-2. Chạy:
+1. Thả ảnh (png, jpg, webp) vào `input/`, hoặc kéo thẳng vào trang `./run.sh --ui`.
 
-   ```bash
-   ./run.sh
-   ```
+2. Chọn cờ theo **loại thiết kế**. Đây là toàn bộ những gì cần nhớ:
+
+   | Thiết kế | Lệnh |
+   |---|---|
+   | Đồ họa phẳng: chữ, logo, huy hiệu | `./run.sh` |
+   | Poster vẽ tay, có glow hoặc halftone | `./run.sh` |
+   | Ảnh chụp người hoặc nhân vật | `./run.sh --fill-holes` |
+   | Ảnh chụp người kèm chữ đồ họa | `./run.sh --fill-holes` |
+   | Bản in nhỏ đặt ở một góc | `./run.sh --place top-right --scale 26` |
+
+   Ngoài `--fill-holes` và `--place`, pipeline tự quyết phần còn lại: nhận diện nền, chọn kiểu key,
+   chọn model upscale. Dòng log in ra nó đã chọn gì.
 
 3. Lấy kết quả:
-   - `output/<tên>.png`: file in, nền trong suốt, 4500 × 5100 px, 300 DPI, thiết kế căn giữa.
-   - `review/<tên>.png`: ảnh gốc bên trái, kết quả bên phải trên nền ca-rô. Lướt nhanh bằng Preview để phát hiện hình bị hỏng.
-   - Ảnh gốc đã xử lý được chuyển sang `input/done/`, ảnh lỗi sang `input/failed/`.
+
+   - `output/<tên>_4500x5100_center.png`: file in, nền trong suốt, 300 DPI. Tên mang theo khung in
+     và vị trí, xem mục **Tên file in**.
+   - `review/<cùng tên>.png`: ảnh gốc bên trái, kết quả bên phải **ghép trên màu áo sẽ in**.
+   - Ảnh gốc chuyển sang `input/done/`, ảnh lỗi sang `input/failed/`.
+
+4. Chấm kết quả bằng `./run.sh --ui`, để ô **nền xem** ở **màu áo**.
+
+   Đừng chấm trên nền trắng hay checkerboard sáng. Thiết kế cho áo tối phần lớn là mực sáng, nên nét
+   trắng biến mất vào nền trắng và trông như thủng trong khi không hề thủng. Khoảng trống giữa các nét
+   chữ vốn là nền, thấy checkerboard ở đó là đúng.
 
 Thử ngay với ảnh mẫu (minh họa phẳng nền trắng):
 
@@ -234,8 +250,9 @@ chuẩn để in DTF/DTG lên áo đen: máy in dùng lớp lót trắng theo đ
 2. **Cắt** về khung bao của hình, chừa lề 2 %.
 3. **Raster (mặc định):** upscale 4 lần bằng Real-ESRGAN, co về khung in, siết viền alpha nhẹ.
    **`--vector`:** gom màu → trace SVG bằng vtracer → vẽ lại bằng resvg đúng kích thước in.
-4. **Xuất** PNG 300 DPI căn giữa trên canvas đúng kích thước, kèm ảnh so sánh trong `review/`
-   (nền đen thì xem trên nền áo đen, còn lại xem trên nền ca-rô).
+4. **Xuất** PNG 300 DPI đặt đúng vị trí trên canvas theo `--place` và `--scale`, tên mang theo khung
+   in và vị trí, kèm ảnh so sánh trong `review/` (ghép trên màu áo khi nền là đen, trắng hay màu
+   trơn; còn lại xem trên nền ca-rô).
 
 Bước gom màu (khi dùng) được thiết kế riêng cho ảnh AI: lọc nhiễu hạt, lấy palette từ pixel bên trong
 mảng nên chấm sáng nhỏ và viền mảnh vẫn giữ màu; màu vừa phân tán thành đốm vừa gần một màu lớn
