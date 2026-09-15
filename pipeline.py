@@ -562,11 +562,21 @@ def key_bg(img: Image.Image, bg: str, floor: float = KEY_FLOOR, solid: bool = Tr
     if solid:
         # A solid area of ink is not a fade, so it has no business being see-through: a red at
         # (195, 20, 25) would otherwise print at 76 % coverage and read thin on the fabric.
-        # Raising alpha is always safe -- color is re-solved below at whatever alpha it ends up
-        # with, so the result on a shirt of the background color does not move -- and it can only
-        # bring color further inside the gamut, never outside.
-        lift = solid_areas(img, key > lo + floor)
-        alpha = np.maximum(alpha, np.where(alpha > 0, lift, 0.0))  # may lift ink, never create it
+        # The lift is a gain, not an assignment: alpha there means coverage times the color's own
+        # brightness, so dividing that brightness out sends the inside of the area to opaque and
+        # carries its anti-aliased rim up by the same factor, keeping the edge an edge. Assigning
+        # full alpha instead would slam a rim pixel at 9 % straight to opaque -- a hard, bloated,
+        # speckled outline. Alpha stays 0 wherever it was 0, so no ink is invented, and color is
+        # re-solved below at whatever alpha comes out, so nothing about the printed result moves.
+        from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+        win = max(3, round(min(key.shape) * 0.003) | 1)
+        ref = ndimage.maximum_filter(key, size=win)  # the flat color a rim pixel is a fraction of
+        # Only where that color is ink itself: next to nothing, the gain would be unbounded and
+        # a single stray pixel just above the noise would come out opaque.
+        gain = np.where(ref > lo + floor, (255.0 - lo) / np.maximum(ref - lo, 1.0), 1.0)
+        w = solid_areas(img, key > lo + floor)
+        alpha = alpha + w * (np.clip(alpha * gain, 0.0, 1.0) - alpha)
     a = alpha[:, :, None]
     color = np.clip((rgb - (1.0 - a) * shirt) / np.where(a > 0, a, 1.0), 0, 255)
     out = np.dstack([color, alpha * 255.0]).round().astype(np.uint8)

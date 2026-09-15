@@ -303,3 +303,26 @@ def test_key_color_floor_drops_a_near_background_area_but_keeps_edges():
     assert on.getpixel((150, 150)) == (216, 13, 25, 255)   # the art is untouched
     assert on.getpixel((211, 150))[3] == off.getpixel((211, 150))[3]  # so is its soft edge
     assert on.getpixel((211, 150))[:3] == off.getpixel((211, 150))[:3]
+
+
+def test_solid_lift_keeps_the_anti_aliased_edge():
+    """Lifting a flat area to opaque must carry its rim up by the same factor, not assign full
+    alpha to it: a rim pixel at 9 % coverage slammed to opaque is a hard, bloated, speckled edge."""
+    im = Image.new("RGB", (300, 300), (0, 0, 0))
+    d = ImageDraw.Draw(im)
+    red = (195, 20, 25)
+    d.rectangle((60, 60, 240, 240), fill=red)
+    for i, frac in enumerate((0.75, 0.45, 0.15)):            # a 3 px anti-aliased ramp
+        v = tuple(round(c * frac) for c in red)
+        d.rectangle((241 + i, 60, 241 + i, 240), fill=v)
+    plain = pipeline.key_bg(im, "black", solid=False)
+    out = pipeline.key_bg(im, "black")
+    assert out.getpixel((150, 150))[3] >= 250                # flat interior: solid ink now
+    assert plain.getpixel((150, 150))[3] < 200               # it was not before
+    ramp = [out.getpixel((241 + i, 150))[3] for i in range(3)]
+    assert ramp[0] > ramp[1] > ramp[2] > 0, ramp             # the rim is still a ramp
+    assert ramp[0] < 250, ramp                               # and none of it went opaque
+    a_plain = np.asarray(plain)[:, :, 3]
+    a_out = np.asarray(out)[:, :, 3]
+    assert (a_out > 0).sum() == (a_plain > 0).sum()          # no ink invented anywhere
+    assert not ((a_plain <= 8) & (a_out > 200)).any()        # nothing faint jumped to opaque

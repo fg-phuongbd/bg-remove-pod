@@ -130,13 +130,17 @@ lại giữ key độ sáng.
 Ngay trong key độ sáng cũng có một lớp nữa: **mảng màu khối được nâng lên đặc**. Với mỗi pixel,
 pipeline hỏi bao nhiêu phần lân cận có cùng màu với nó. Mảng mực khối trả lời gần hết cửa sổ, dốc
 glow chỉ trả lời đúng dải mỏng của bậc nó đang đứng, còn bóng đổ trong ảnh chụp thì ít hơn nữa. Trên
-một thiết kế pha trộn, ba con số đó là 0,64, 0,17 và 0,31. Chỗ nào vượt ngưỡng thì alpha lên 255,
-chỗ nào không thì giữ nguyên dốc theo độ sáng.
+một thiết kế pha trộn, ba con số đó là 0,64, 0,17 và 0,31. Chỗ nào vượt ngưỡng thì alpha được **nhân hệ
+số**, không phải gán cứng bằng 255. Alpha ở đó vốn là độ phủ nhân với độ sáng của chính màu đó, nên
+chia ngược độ sáng ra sẽ đưa ruột mảng lên đặc và kéo cả dải răng cưa ở mép lên cùng hệ số, giữ mép
+vẫn là mép. Gán cứng thì một pixel mép đang phủ 9% sẽ nhảy thẳng lên đặc, cho ra viền cứng, phình và
+lốm đốm.
 
 Nhờ vậy thiết kế **pha trộn**, tức ảnh chụp cộng chữ đồ họa, không cần cờ nào: chữ đỏ `(195, 20, 25)`
 ra đặc thay vì 76%, còn glow và bóng đổ vẫn tan vào áo. Việc nâng alpha không bao giờ đổi kết quả in,
 vì màu được giải lại theo alpha mới; nó cũng không tạo mực ở chỗ vốn trong suốt. Đo trên 10 ảnh nền
-đen: tỉ lệ pixel đặc từ 21,2% lên 61,4%, sai số khi in giảm từ 1,10 xuống 0,94 mức trên 255. Dòng log in ra `cách: key khoảng cách màu` hay `cách: key nền đen` để bạn biết
+đen: tỉ lệ pixel đặc từ 21,2% lên 30,9%, sai số khi in giảm từ 1,10 xuống 1,04 mức trên 255, không
+ảnh nào thêm một pixel mực nào. Dòng log in ra `cách: key khoảng cách màu` hay `cách: key nền đen` để bạn biết
 nó chọn gì. Ép tay bằng `--bg black` hoặc `--bg color` nếu nhận diện sai.
 
 Phép đo này khắt khe hơn `kiểu: flat/detail` ở cùng dòng log, vì cái đó chỉ dùng để chọn model
