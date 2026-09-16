@@ -70,7 +70,14 @@
     background-position: 0 0, 0 11px, 11px -11px, -11px 0;
     background-color: #fff;
   }
-  #nums { display: flex; gap: 22px; padding: 10px 16px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  #nums { display: flex; gap: 22px; padding: 10px 16px; border-top: 1px solid var(--line); flex-wrap: wrap; align-items: flex-start; }
+  /* Ô kết luận đứng trước các con số: câu trả lời trước, dẫn chứng sau. */
+  .verdict { border-radius: 8px; padding: 8px 14px; min-width: 190px; }
+  .verdict .lbl { font-size: 15px; font-weight: 700; }
+  .verdict .why { font-size: 11px; line-height: 1.45; margin-top: 4px; opacity: .92; }
+  .verdict.dat { background: #1f3a2a; border: 1px solid #3f7a55; color: #b6f0c8; }
+  .verdict.xem { background: #3b3320; border: 1px solid #8a7433; color: #ffd479; }
+  .verdict.hong { background: #3a2426; border: 1px solid #7a4448; color: #ffb4b4; }
   #nums div { font-size: 12px; color: var(--dim); }
   #nums b { display: block; font-size: 17px; color: var(--text); font-weight: 600; }
   #msg { padding: 0 16px 10px; color: var(--dim); font-size: 12px; white-space: pre-wrap; }
@@ -310,7 +317,11 @@ async function select(name) {
 }
 
 function showNums(r) {
-  $("#nums").innerHTML = `
+  const v = r.muc ? `<div class="verdict ${r.muc}">
+      <div class="lbl">${esc(r.nhan)}</div>
+      ${r.why && r.why.length ? `<div class="why">${r.why.map(w => "• " + esc(w)).join("<br>")}</div>` : ""}
+    </div>` : "";
+  $("#nums").innerHTML = v + `
     <div>mực đặc<b>${r.dac}%</b></div>
     <div>mực trùng màu áo<b>${r.thua}%</b></div>
     <div title="dưới 40% độ phủ: in DTF dễ bong">phủ thấp<b${r.phu_thap > 5 ? ' style="color:#ffd479"' : ''}>${r.phu_thap}%</b></div>

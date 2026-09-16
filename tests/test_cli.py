@@ -224,7 +224,8 @@ def test_audit_prints_a_table_and_flags_what_to_check(tmp_path, monkeypatch, cap
     Image.fromarray(bad, "RGBA").save(tmp_path / "output" / "hinh_240x240_top-left.png")
     assert pipeline.main(["--audit"]) == 0
     out = capsys.readouterr().out
-    assert "cần xem" in out and "--fill-holes" in out
+    assert "Không dùng được" in out and "--fill-holes" in out
+    assert "đủ điều kiện in:" in out and "/2 file" in out
 
 
 def test_audit_says_so_when_there_is_nothing_to_grade(tmp_path, monkeypatch, capsys):
@@ -315,3 +316,21 @@ def test_low_coverage_reads_the_print_file():
     img = Image.fromarray(a, "RGBA")
     assert 35 < pipeline.low_coverage(img) < 40      # 30 trên 80 pixel có mực
     assert pipeline.low_coverage(Image.new("RGBA", (4, 4), (0, 0, 0, 0))) == 0.0
+
+
+def test_print_verdict_is_the_single_place_that_decides():
+    v = pipeline.print_verdict
+    good = {"dac": 95.0, "phu_thap": 0.4, "thua": 0.1, "sai_so": 0.3}
+    assert v(good)["muc"] == "dat" and v(good)["why"] == []
+
+    # phủ thấp là rủi ro của DTF, in được nhưng nên thử giặt trước
+    soft = v(dict(good, phu_thap=15.7))
+    assert soft["muc"] == "xem" and "DTF" in soft["why"][0]
+
+    # mực in đè lên áo cùng màu: bật --fill-holes nhầm cho poster
+    hard = v(dict(good, thua=60.0))
+    assert hard["muc"] == "hong" and "fill-holes" in hard["why"][0]
+
+    assert v(dict(good, sai_so=9.0))["muc"] == "hong"
+    assert v({"dac": 0.0, "phu_thap": 0.0, "thua": 0.0, "sai_so": 0.0})["muc"] == "hong"
+    assert v(dict(good, phu_thap=15.7), dtf_warn=100)["muc"] == "dat"   # ngưỡng đổi được

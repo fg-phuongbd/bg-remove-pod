@@ -233,7 +233,11 @@ class Handler(BaseHTTPRequestHandler):
             elif parts[0] == "api" and parts[1] == "report" and len(parts) == 3:
                 src = source_path(parts[2])
                 outs = outputs_for(src.stem)
-                self._json(dict(measure(outs[0], src), out=outs[0].name) if outs else {})
+                if outs:
+                    rep = measure(outs[0], src)
+                    self._json(dict(rep, **pipeline.print_verdict(rep), out=outs[0].name))
+                else:
+                    self._json({})
             elif parts[0] == "src" and len(parts) == 2:
                 self._file(preview(source_path(parts[1]), THUMB_PX, "src"))
             elif parts[0] == "out" and len(parts) == 2:

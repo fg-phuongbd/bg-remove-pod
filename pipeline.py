@@ -1094,26 +1094,41 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     return out_path
 
 
+def print_verdict(report: dict, dtf_warn: float = DTF_WARN) -> dict:
+    """Kết luận một file in có dùng được không, kèm lý do. Một chỗ duy nhất quyết định điều này,
+    để dòng lệnh, bảng chấm và trang không bao giờ nói khác nhau.
+
+    Ba mức: `hong` là file không dùng được, `xem` là in được nhưng có chỗ đáng ngờ nên xem lại,
+    `dat` là không thấy vấn đề nào. Ngưỡng đều lấy từ số đo thật trên một bộ 26 thiết kế."""
+    hard, soft = [], []
+    if report["dac"] == 0 and report["thua"] == 0:
+        hard.append("file rỗng, không có pixel mực nào")
+    if report["thua"] > 20:
+        hard.append(f"{report['thua']:.0f}% mực in đè lên áo cùng màu, gần như chắc là bật "
+                    f"--fill-holes nhầm cho poster")
+    if (report.get("sai_so") or 0) > 5:
+        hard.append(f"sai số khi in {report['sai_so']:.1f} mức trên 255, mở ảnh so sánh xem bằng mắt")
+    if report.get("phu_thap", 0) > dtf_warn:
+        soft.append(f"{report['phu_thap']:.0f}% diện tích mực dưới 40% độ phủ, in DTF dễ bong. "
+                    f"In thử một chiếc và giặt vài lần trước khi chạy số lượng")
+    if report["dac"] < 50:
+        soft.append("mực mỏng, đúng với poster halftone nhưng đáng ngờ với đồ họa phẳng")
+    muc = "hong" if hard else ("xem" if soft else "dat")
+    return {"muc": muc,
+            "nhan": {"hong": "Không dùng được", "xem": "In được, nên xem lại",
+                     "dat": "Đủ điều kiện in"}[muc],
+            "why": hard + soft}
+
+
 def audit_rows(sources: list[Path]) -> list[dict]:
     """Chấm mọi file in của các ảnh gốc đã cho, kèm lý do cần xem lại, sắp xếp mực mỏng lên trước.
 
-    Ngưỡng đánh dấu lấy từ số đo thật trên một bộ 26 ảnh: mực thừa quá 20% gần như chắc là bật
-    --fill-holes nhầm cho poster, sai số quá 5 thì nên mở ảnh so sánh ra xem bằng mắt."""
+    Kết luận và ngưỡng nằm ở print_verdict, dùng chung với trang."""
     rows = []
     for src in sources:
         for out in sorted(OUTPUT_DIR.glob(f"{glob.escape(src.stem)}_*.png")):
             r = dict(measure_print(out, src), name=out.name, src=src.name)
-            why = []
-            if r["thua"] > 20:
-                why.append("mực in đè lên áo cùng màu quá nhiều, xem lại --fill-holes")
-            if r["phu_thap"] > DTF_WARN:
-                why.append(f"{r['phu_thap']:.0f}% diện tích mực dưới 40% độ phủ, in DTF dễ bong, "
-                           f"nên in thử một chiếc và giặt vài lần trước khi chạy số lượng")
-            if (r["sai_so"] or 0) > 5:
-                why.append("sai số khi in cao, mở ảnh so sánh xem bằng mắt")
-            if r["dac"] < 50:
-                why.append("mực mỏng, đúng với poster halftone nhưng đáng ngờ với đồ họa phẳng")
-            r["why"] = why
+            r.update(print_verdict(r))
             rows.append(r)
     return sorted(rows, key=lambda r: r["dac"])
 
@@ -1126,17 +1141,20 @@ def audit(sources: list[Path]) -> int:
         return 0
     print(f"{'đặc%':>6s} {'phủ thấp%':>10s} {'thừa%':>7s} {'sai số':>7s}  file")
     for r in rows:
+        mark = {"dat": "", "xem": "  <-- xem lại", "hong": "  <-- KHÔNG DÙNG ĐƯỢC"}[r["muc"]]
         print(f"{r['dac']:6.1f} {r['phu_thap']:10.1f} {r['thua']:7.2f}"
               f" {r['sai_so'] if r['sai_so'] is not None else 0:7.2f}"
-              f"  {r['name'][:50]}{'  <--' if r['why'] else ''}")
+              f"  {r['name'][:46]}{mark}")
     d = [r["dac"] for r in rows]
     t = [r["thua"] for r in rows]
     f = [r["sai_so"] or 0.0 for r in rows]
     print(f"\n{len(rows)} file | mực đặc tb {sum(d)/len(d):.1f}% | mực thừa tb {sum(t)/len(t):.2f}% | "
           f"sai số tb {sum(f)/len(f):.2f}")
+    ok = sum(1 for r in rows if r["muc"] == "dat")
+    print(f"đủ điều kiện in: {ok}/{len(rows)} file")
     for r in rows:
         if r["why"]:
-            print(f"  cần xem: {r['name'][:56]}")
+            print(f"  {r['nhan']}: {r['name'][:56]}")
             for w in r["why"]:
                 print(f"      - {w}")
     return 0

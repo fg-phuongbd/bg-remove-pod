@@ -78,7 +78,18 @@ số cho mọi file in, đánh dấu vàng ảnh cần xem lại kèm lý do, gi
 trình con Real-ESRGAN nên chạy vài ảnh một lúc rút ngắn đáng kể, nhưng mỗi ảnh giữ vài mảng cỡ
 5000 x 5000 trong bộ nhớ nên đừng đẩy quá cao.
 
-**Ba con số chấm chất lượng** hiện ngay dưới ảnh:
+**Ô kết luận** nằm ngay dưới ảnh, trả lời thẳng file có in được không:
+
+| Mức | Nghĩa |
+|---|---|
+| Đủ điều kiện in | không thấy vấn đề nào |
+| In được, nên xem lại | phủ thấp vượt ngưỡng DTF, hoặc mực mỏng bất thường |
+| Không dùng được | file rỗng, mực in đè lên áo cùng màu quá 20%, hoặc sai số khi in quá 5 |
+
+Luật quyết định nằm ở `print_verdict` trong `pipeline.py`, dùng chung cho cả `--audit`, nên dòng lệnh
+và trang không bao giờ nói khác nhau.
+
+**Bốn con số chấm chất lượng** hiện cạnh ô đó:
 
 | Số | Nghĩa |
 |---|---|
