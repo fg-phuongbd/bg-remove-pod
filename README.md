@@ -226,14 +226,43 @@ rộng hộp đó còn hình dọc dùng hết chiều cao.
 `--margin` là khoảng hở từ mép khung, mặc định 2% cạnh ngắn, chỉ có tác dụng khi `--place` khác
 `center`. Hình căn giữa thì không bao giờ chạm tới nó.
 
+## In một màu: `--ink`
+
+```bash
+./run.sh --ink black          # tách một màu đen, cho áo sáng
+./run.sh --ink "#ff0055"      # một màu hồng
+```
+
+Đây là bản tách màu của thợ in lụa, không phải bôi cả hình thành một khối. Mỗi pixel được hỏi nó đi
+bao xa trên đường từ **màu áo** tới **màu mực**: chỗ trùng màu áo thì không có mực, chỗ tới hẳn màu
+mực thì phủ kín, chỗ ở giữa ra độ phủ ở giữa. Nhờ vậy một cái sọ chụp ảnh cho ra đúng mảng đặc và khe
+hở như khi làm tay trong Photoshop.
+
+Câu hỏi đặt trên **ảnh đã ghép lên áo**, vì đó mới là thứ mắt thấy; màu lưu trong file đã được chia
+ngược cho alpha nên tự nó không nói lên độ đậm nhạt.
+
+Chọn mực gần trùng màu nền ảnh gốc thì pipeline báo lỗi thay vì lặng lẽ ra file rỗng, vì in ra sẽ
+không thấy gì. Ảnh gốc đã trong suốt sẵn cũng bị từ chối: không có nền thì không đo được màu áo.
+
+## Chấm cả lô: `--audit`
+
+```bash
+./run.sh --audit
+```
+
+In bảng ba con số cho mọi file in đang có rồi thoát, không xử lý ảnh nào. Trang UI cho từng ảnh một;
+bảng này cho cả lô một lượt để thấy ảnh nào lệch khỏi phần còn lại. Ảnh bị đánh dấu `<--` kèm lý do
+khi mực thừa quá 20%, sai số quá 5, hoặc mực đặc dưới 50%.
+
 ## Tên file in
 
 ```
 tên-ảnh_khung-in_vị-trí.png       ->  skull_4500x5100_center.png
 tên-ảnh_khung-in_vị-trí_cỡ.png    ->  skull_4500x5100_top-right_26pc.png
+tên-ảnh_khung-in_vị-trí_mực.png   ->  skull_4500x5100_center_ink-black.png
 ```
 
-Cỡ chỉ xuất hiện khi khác 100%, để tên mặc định vẫn gọn. Nhờ mang theo khung và vị trí, chạy lại
+Cỡ và màu mực chỉ xuất hiện khi khác mặc định, để tên mặc định vẫn gọn. Nhờ mang theo khung và vị trí, chạy lại
 cùng một ảnh ở cỡ hoặc vị trí khác sẽ ra file riêng chứ không đè lên nhau. Ảnh so sánh trong
 `review/` dùng đúng tên đó.
 

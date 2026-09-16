@@ -6,6 +6,7 @@ Default mode traces the design to vector (vtracer) and re-renders it (resvg).
 from __future__ import annotations
 
 import argparse
+import glob
 import re
 import shutil
 import subprocess
@@ -16,7 +17,7 @@ import time
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 # ---------------------------------------------------------------- constants
 ROOT = Path(__file__).resolve().parent
@@ -45,12 +46,24 @@ class EmptyResult(Exception):
 
 
 # ---------------------------------------------------------------- geometry
-def out_name(stem: str, box: tuple[int, int], place: str, scale: float) -> str:
-    """Tên file in: tên ảnh, khung in, vị trí, và cỡ nếu không phải 100%.
+def load_image(path: Path) -> Image.Image:
+    """Mở ảnh gốc, xoay theo cờ EXIF, trả về RGBA.
 
-    Cỡ chỉ xuất hiện khi khác 100 để tên mặc định vẫn gọn (`name_4500x5100_center.png`), nhưng
-    hai bản in nhỏ cùng một góc mà khác cỡ thì không đè lên nhau."""
+    Máy ảnh và điện thoại hay lưu ảnh nằm ngang kèm một cờ bảo phần mềm xoay lại khi hiển thị.
+    Đọc thô thì được đúng dữ liệu nhưng sai hướng, và cả file in lẫn màu nền đo được đều lệch theo.
+    Mọi chỗ đọc ảnh gốc đều phải đi qua đây."""
+    im = Image.open(path)
+    im.load()
+    return ImageOps.exif_transpose(im).convert("RGBA")
+
+
+def out_name(stem: str, box: tuple[int, int], place: str, scale: float, ink: str = "none") -> str:
+    """Tên file in: tên ảnh, khung in, vị trí, rồi cỡ và màu mực nếu khác mặc định.
+
+    Cỡ và màu mực chỉ xuất hiện khi khác mặc định để tên vẫn gọn (`name_4500x5100_center.png`),
+    nhưng hai bản khác cỡ hoặc khác mực thì không đè lên nhau."""
     tail = "" if scale == 100.0 else f"_{scale:g}pc"
+    tail += "" if ink.strip().lower() in ("", "none") else f"_ink-{ink.strip().lower().lstrip('#')}"
     return f"{stem}_{box[0]}x{box[1]}_{place}{tail}.png"
 
 
@@ -698,6 +711,47 @@ def solid_core(keyed: Image.Image, original: Image.Image, silhouette: Image.Imag
     return Image.fromarray(np.dstack([color, alpha]).round().astype(np.uint8), "RGBA")
 
 
+def parse_ink(value: str) -> tuple[int, int, int] | None:
+    """Màu mực cho --ink: `black`, `white`, hoặc mã hex `#rrggbb`. `none` = giữ nguyên màu."""
+    v = value.strip().lower()
+    if v in ("", "none"):
+        return None
+    named = {"black": (0, 0, 0), "white": (255, 255, 255)}
+    if v in named:
+        return named[v]
+    hexa = v.lstrip("#")
+    if len(hexa) != 6 or any(c not in "0123456789abcdef" for c in hexa):
+        raise argparse.ArgumentTypeError(f"màu mực không hiểu: {value!r} (dùng black, white hoặc #rrggbb)")
+    return tuple(int(hexa[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def one_ink(img: Image.Image, ink: tuple[int, int, int], shirt: tuple[int, int, int]) -> Image.Image:
+    """Tách một màu: cả thiết kế in bằng đúng một màu mực, alpha là độ phủ.
+
+    Đây là bản tách màu của thợ in lụa, không phải đổ bóng thành một khối. Mỗi pixel được hỏi nó
+    đi bao xa trên đường từ **màu áo** tới **màu mực**: chỗ trùng màu áo thì không có mực, chỗ tới
+    hẳn màu mực thì phủ kín, chỗ ở giữa ra độ phủ ở giữa. Nhờ vậy một cái sọ chụp ảnh trên nền
+    trắng cho ra đúng mảng đen và khe hở trắng như khi làm tay trong Photoshop, thay vì thành một
+    vệt đen đặc.
+
+    Hỏi trên **ảnh đã ghép lên áo**, vì đó mới là thứ mắt thấy; màu lưu trong file đã được chia
+    ngược cho alpha nên tự nó không nói lên độ đậm nhạt."""
+    a = np.asarray(img.convert("RGBA")).astype(np.float32)
+    w = a[:, :, 3:] / 255.0
+    shirt_v = np.array(shirt, dtype=np.float32)
+    ink_v = np.array(ink, dtype=np.float32)
+    on_shirt = a[:, :, :3] * w + shirt_v * (1 - w)
+    axis = ink_v - shirt_v
+    denom = float(axis @ axis)
+    if denom < 30 ** 2:
+        raise EmptyResult(
+            f"mực {tuple(int(v) for v in ink_v)} gần trùng màu áo {tuple(int(v) for v in shirt_v)}: "
+            f"in ra sẽ không thấy gì. Chọn màu mực tương phản với nền ảnh gốc.")
+    t = np.clip(((on_shirt - shirt_v) @ axis) / denom, 0.0, 1.0)
+    out = np.dstack([np.broadcast_to(ink_v, a[:, :, :3].shape), t * 255.0])
+    return Image.fromarray(out.round().astype(np.uint8), "RGBA")
+
+
 def detect_style(cut: Image.Image) -> str:
     """'flat' when most *design* pixels (alpha >= 128) sit in locally uniform color, else 'detail'.
     Used to pick the upscale model (anime for flat art, x4plus for painterly)."""
@@ -844,13 +898,52 @@ def make_review(original: Image.Image, result: Image.Image, path: Path, height: 
     canvas.save(path, "PNG")
 
 
+# ---------------------------------------------------------------- chấm chất lượng
+def measure_print(out: Path, src: Path) -> dict:
+    """Ba con số chấm một file in, tính trên đúng màu áo mà file đó nhắm tới.
+
+    `dac`: phần trăm pixel mực đặc hoàn toàn. Thấp nghĩa là mực mỏng, in ra vải lộ qua. Đọc theo
+    loại thiết kế: poster halftone thấp là đúng, logo phẳng thấp là đáng ngờ.
+    `thua`: phần trăm mực đục nhưng trùng màu áo, tức chỗ máy phủ lót trắng rồi in đè lên vải.
+    `sai_so`: ghép file lên màu áo rồi so với ảnh gốc, theo mức trên 255.
+    """
+    o = np.asarray(Image.open(out).convert("RGBA")).astype(np.float32)
+    alpha = o[:, :, 3]
+    ink = alpha > 0
+    if not ink.any():
+        return {"dac": 0.0, "thua": 0.0, "sai_so": None, "shirt": "#808080"}
+    original = load_image(src).convert("RGB")
+    bg = np.array(bg_color(original), dtype=np.float32)
+    a = (alpha / 255.0)[:, :, None]
+    on_shirt = o[:, :, :3] * a + bg * (1 - a)
+    wasted = (alpha > 200) & (np.linalg.norm(on_shirt - bg, axis=2) < 30)
+    kind = detect_bg(original)
+    shirt = {"black": (20, 20, 22), "white": (245, 245, 245)}.get(kind) or tuple(int(v) for v in bg)
+    return {
+        "dac": round(100 * float((alpha[ink] > 250).mean()), 1),
+        "thua": round(100 * float(wasted.sum()) / float(ink.sum()), 2),
+        "sai_so": round(_key_fidelity(original, kind), 2),
+        "shirt": "#%02x%02x%02x" % shirt,
+    }
+
+
+def _key_fidelity(original: Image.Image, kind: str) -> float:
+    """Sai số của riêng bước key, đo ở độ phân giải gốc nên không lẫn sai số căn ảnh."""
+    if kind == "none":
+        return 0.0
+    mode = key_style(kind, is_flat_art(original))
+    keyed = np.asarray(key_bg(original, mode)).astype(np.float32)
+    a = keyed[:, :, 3:] / 255.0
+    bg = np.array(bg_color(original), dtype=np.float32)
+    src = np.asarray(original.convert("RGB")).astype(np.float32)
+    return float(np.abs(keyed[:, :, :3] * a + bg * (1 - a) - src).mean())
+
+
 # ---------------------------------------------------------------- pipeline
 def process_one(src: Path, args: argparse.Namespace) -> Path:
     box = target_box_px(args.size)
     inner = art_box(box, args.scale)
-    original = Image.open(src)
-    original.load()
-    original = original.convert("RGBA")
+    original = load_image(src)
     WORK_DIR.mkdir(parents=True, exist_ok=True)
 
     kind = detect_bg(original)
@@ -902,6 +995,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     how += (" + thân hình đặc" if bg != "ai" else " + lấp lỗ") if filled_in else ""
     shirt_txt = "" if bg == "none" else f" | áo: {SHIRT_LABEL['same' if bg != 'ai' else 'other']}"
     place_txt = "" if args.place == "center" and args.scale == 100.0 else f" | đặt: {args.place} {args.scale:g}%"
+    place_txt += "" if args.ink.lower() in ("", "none") else f" | mực: {args.ink}"
     print(f"  nền: {kind}{shirt_txt} | cách: {how} | kiểu: {style} | {'vector' if args.vector else 'raster'}{place_txt}"
           f"{f', gom {colors} màu' if colors else ', giữ nguyên màu'}")
 
@@ -929,11 +1023,58 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             result = flatten_raster(result, colors, args.merge)
 
     result = place_on_canvas(result, box, args.place, args.margin)
-    name = out_name(src.stem, box, args.place, args.scale)
+    ink = parse_ink(args.ink)
+    if ink is not None:
+        if kind == "none":
+            raise EmptyResult("--ink cần biết màu áo, mà ảnh gốc đã trong suốt nên không đo được nền. "
+                              "Dùng ảnh gốc có nền trơn.")
+        # Màu nền thật, không phải màu áo dùng để xem: (20, 20, 22) chỉ để ảnh so sánh nhìn ra vải,
+        # còn phép tách một màu phải hỏi đúng cái nền mà bước key đã giải ngược.
+        result = one_ink(result, ink, bg_rgb(original, bg) if bg in BG_KINDS else bg_color(original))
+    name = out_name(src.stem, box, args.place, args.scale, args.ink)
     out_path = OUTPUT_DIR / name
     save_print_png(result, out_path)
     make_review(original, result, REVIEW_DIR / name, shirt=shirt)
     return out_path
+
+
+def audit(sources: list[Path]) -> int:
+    """In bảng chấm cho mọi file in đang có, đánh dấu ảnh cần xem lại bằng mắt.
+
+    Trang UI cho ba con số của từng ảnh; bảng này cho cả lô một lượt, để thấy ảnh nào lệch khỏi
+    phần còn lại. Ngưỡng đánh dấu lấy từ số đo thật: mực thừa quá 20% gần như chắc là bật
+    --fill-holes nhầm cho poster, sai số quá 5 thì nên mở ảnh so sánh ra xem."""
+    rows = []
+    for src in sources:
+        for out in sorted(OUTPUT_DIR.glob(f"{glob.escape(src.stem)}_*.png")):
+            rows.append((out.name, measure_print(out, src)))
+    if not rows:
+        print(f"Chưa có file in nào trong {OUTPUT_DIR}")
+        return 0
+    print(f"{'đặc%':>6s} {'thừa%':>7s} {'sai số':>7s}  file")
+    flagged = []
+    for name, r in sorted(rows, key=lambda x: x[1]["dac"]):
+        why = []
+        if r["thua"] > 20:
+            why.append("mực in đè lên áo cùng màu quá nhiều, xem lại --fill-holes")
+        if (r["sai_so"] or 0) > 5:
+            why.append("sai số khi in cao, mở review/ xem bằng mắt")
+        if r["dac"] < 50:
+            why.append("mực mỏng, đúng với poster halftone nhưng đáng ngờ với đồ họa phẳng")
+        print(f"{r['dac']:6.1f} {r['thua']:7.2f} {r['sai_so'] if r['sai_so'] is not None else 0:7.2f}"
+              f"  {name[:56]}{'  <--' if why else ''}")
+        if why:
+            flagged.append((name, why))
+    d = [r["dac"] for _, r in rows]
+    t = [r["thua"] for _, r in rows]
+    f = [r["sai_so"] or 0.0 for _, r in rows]
+    print(f"\n{len(rows)} file | mực đặc tb {sum(d)/len(d):.1f}% | mực thừa tb {sum(t)/len(t):.2f}% | "
+          f"sai số tb {sum(f)/len(f):.2f}")
+    for name, why in flagged:
+        print(f"  cần xem: {name[:56]}")
+        for w in why:
+            print(f"      - {w}")
+    return 0
 
 
 def _collect(args: argparse.Namespace) -> list[Path]:
@@ -966,6 +1107,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                        help="thiết kế chiếm bao nhiêu phần trăm khung in, giữ nguyên tỉ lệ hình. Mặc định 100 = lấp đầy khung")
     daily.add_argument("--vector", action="store_true",
                        help="minh họa phẳng: gom màu rồi trace vector (mảng màu tuyệt đối phẳng, viền cong mượt). Mặc định là raster: upscale AI, giữ nguyên màu")
+    daily.add_argument("--ink", default="none",
+                       help="in một màu duy nhất: black, white, hoặc #rrggbb. Alpha thành độ phủ, "
+                            "đúng kiểu tách một màu để in lụa. Mặc định none = giữ nguyên màu")
+    daily.add_argument("--audit", action="store_true",
+                       help="in bảng chấm chất lượng cho mọi file in đang có rồi thoát, không xử lý ảnh nào")
     daily.add_argument("--ui", action="store_true",
                        help="mở trang xem tại máy: chọn cờ theo từng ảnh, xem kết quả trên đúng màu áo, kèm số chấm chất lượng")
     daily.add_argument("files", nargs="*", help="chỉ xử lý các file này thay cho cả input/")
@@ -1000,6 +1146,12 @@ def main(argv: list[str] | None = None) -> int:
 
         ui.serve()
         return 0
+    if args.audit:
+        done = INPUT_DIR / "done"
+        srcs = _collect(args) if args.files else sorted(
+            p for folder in (INPUT_DIR, done) if folder.is_dir()
+            for p in folder.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS)
+        return audit(srcs)
     check_tools()
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     files = _collect(args)
@@ -1023,7 +1175,9 @@ def main(argv: list[str] | None = None) -> int:
             reason = str(e) or e.__class__.__name__
             failed.append((src, reason))
             print(f"  LỖI: {reason}")
-            if src.parent == INPUT_DIR:
+            # --keep-input giữ ảnh tại chỗ cả khi lỗi: trên trang, ảnh bị chuyển sang failed/ sẽ
+            # biến mất khỏi danh sách và không sửa cờ chạy lại được.
+            if src.parent == INPUT_DIR and not args.keep_input:
                 _move(src, "failed")
 
     print(f"\nXong: {len(ok)} thành công, {len(failed)} lỗi.")

@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from PIL import Image, ImageDraw, ImageFilter
 
 import pipeline
@@ -340,3 +341,32 @@ def test_redundant_ink_counts_only_opaque_pixels_that_match_the_shirt():
     assert 36 < share < 39, share             # 3000 trên 8000 pixel có mực
     assert pipeline.redundant_ink(Image.new("RGBA", (10, 10), (0, 0, 0, 0)),
                                   Image.new("RGB", (10, 10)), bg) == 0.0
+
+
+def test_one_ink_maps_the_shirt_to_ink_axis_into_coverage():
+    """Tách một màu là chuyển độ đậm nhạt thành độ phủ, không phải bôi cả hình thành một khối."""
+    shirt, ink = (255, 255, 255), (0, 0, 0)
+    a = np.zeros((1, 4, 4), np.uint8)
+    a[0, 0] = (255, 255, 255, 255)      # đúng màu áo -> không có mực
+    a[0, 1] = (0, 0, 0, 255)            # đúng màu mực -> phủ kín
+    a[0, 2] = (128, 128, 128, 255)      # nửa đường -> nửa độ phủ
+    a[0, 3] = (0, 0, 0, 0)              # ngoài thiết kế -> vẫn trống
+    out = np.asarray(pipeline.one_ink(Image.fromarray(a, "RGBA"), ink, shirt))
+    assert out[0, 0, 3] == 0
+    assert out[0, 1, 3] == 255
+    assert 120 < out[0, 2, 3] < 136, out[0, 2, 3]
+    assert out[0, 3, 3] == 0
+    assert {tuple(c) for c in out[:, :, :3].reshape(-1, 3)} == {ink}   # đúng một màu mực
+
+
+def test_one_ink_reads_the_design_as_it_sits_on_the_shirt():
+    """Màu trong file đã chia ngược cho alpha, nên phải hỏi bản ghép trên áo mới ra đúng độ đậm."""
+    shirt, ink = (0, 0, 0), (255, 255, 255)
+    a = np.array([[[255, 255, 255, 128]]], np.uint8)   # trắng ở nửa alpha = xám trên áo đen
+    out = np.asarray(pipeline.one_ink(Image.fromarray(a, "RGBA"), ink, shirt))
+    assert 120 < out[0, 0, 3] < 136, out[0, 0, 3]      # nửa độ phủ, không phải phủ kín
+
+
+def test_one_ink_refuses_a_color_that_would_be_invisible():
+    with pytest.raises(pipeline.EmptyResult, match="không thấy gì"):
+        pipeline.one_ink(Image.new("RGBA", (4, 4), (255, 255, 255, 255)), (10, 10, 10), (0, 0, 0))

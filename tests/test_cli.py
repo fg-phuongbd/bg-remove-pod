@@ -167,3 +167,111 @@ def test_fill_holes_is_skipped_when_it_would_print_over_the_shirt(tmp_path, monk
     assert pipeline.main(["--size", "240x240", "--keep-input", "--fill-holes", "--bg", "black",
                           "--fill-limit", "100", str(src)]) == 0
     assert "BỎ QUA" not in capsys.readouterr().out   # tắt chốt chặn thì vẫn tô như cũ
+
+
+def test_parse_ink_accepts_names_and_hex():
+    assert pipeline.parse_ink("black") == (0, 0, 0)
+    assert pipeline.parse_ink("WHITE") == (255, 255, 255)
+    assert pipeline.parse_ink("#ff0055") == (255, 0, 85)
+    assert pipeline.parse_ink("none") is None and pipeline.parse_ink("") is None
+    for bad in ("xanh", "#fff", "#gggggg"):
+        with pytest.raises(Exception):
+            pipeline.parse_ink(bad)
+
+
+def test_out_name_records_a_non_default_ink():
+    n = pipeline.out_name
+    assert n("a", (4500, 5100), "center", 100.0, "none") == "a_4500x5100_center.png"
+    assert n("a", (4500, 5100), "center", 100.0, "black") == "a_4500x5100_center_ink-black.png"
+    assert n("a", (4500, 5100), "center", 100.0, "#ff0055") == "a_4500x5100_center_ink-ff0055.png"
+
+
+def test_load_image_applies_the_exif_rotation(tmp_path):
+    """Ảnh chụp điện thoại lưu nằm ngang kèm cờ xoay; đọc thô thì file in ra sai hướng."""
+    import io
+    im = Image.new("RGB", (400, 200), (0, 0, 0))
+    im.paste(Image.new("RGB", (100, 100), (255, 0, 0)), (0, 0))
+    exif = Image.Exif()
+    exif[274] = 6                                     # Orientation: xoay 90 độ
+    p = tmp_path / "nghieng.jpg"
+    im.save(p, "JPEG", exif=exif)
+    assert Image.open(p).size == (400, 200)           # thô: vẫn nằm ngang
+    assert pipeline.load_image(p).size == (200, 400)  # đã xoay đúng
+    assert pipeline.load_image(p).mode == "RGBA"
+
+
+def test_audit_prints_a_table_and_flags_what_to_check(tmp_path, monkeypatch, capsys):
+    for name, attr in (("input", "INPUT_DIR"), ("output", "OUTPUT_DIR"),
+                       ("work", "WORK_DIR"), ("review", "REVIEW_DIR")):
+        d = tmp_path / name
+        d.mkdir()
+        monkeypatch.setattr(pipeline, attr, d)
+    monkeypatch.setattr(pipeline, "check_tools", lambda: None)
+    monkeypatch.setattr(pipeline, "upscale", lambda img, scale=4, model="": img)
+    src = tmp_path / "input" / "hinh.png"
+    _poster_on_black(src)
+    assert pipeline.main(["--size", "240x240", "--keep-input", str(src)]) == 0
+    capsys.readouterr()
+
+    assert pipeline.main(["--audit"]) == 0
+    out = capsys.readouterr().out
+    assert "hinh_240x240_center.png" in out
+    assert "mực đặc tb" in out and "1 file" in out
+
+    # một file toàn mực trùng màu áo phải bị đánh dấu
+    bad = np.zeros((40, 40, 4), np.uint8)
+    bad[..., 3] = 255
+    Image.fromarray(bad, "RGBA").save(tmp_path / "output" / "hinh_240x240_top-left.png")
+    assert pipeline.main(["--audit"]) == 0
+    out = capsys.readouterr().out
+    assert "cần xem" in out and "--fill-holes" in out
+
+
+def test_audit_says_so_when_there_is_nothing_to_grade(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(pipeline, "OUTPUT_DIR", tmp_path / "output")
+    monkeypatch.setattr(pipeline, "INPUT_DIR", tmp_path / "input")
+    (tmp_path / "input").mkdir()
+    assert pipeline.main(["--audit"]) == 0
+    assert "Chưa có file in nào" in capsys.readouterr().out
+
+
+def test_ink_is_refused_when_it_matches_the_real_background(tmp_path, monkeypatch, capsys):
+    """Màu áo dùng để xem là (20, 20, 22) cho dễ nhìn ra vải; phép tách một màu phải hỏi nền thật."""
+    for name, attr in (("input", "INPUT_DIR"), ("output", "OUTPUT_DIR"),
+                       ("work", "WORK_DIR"), ("review", "REVIEW_DIR")):
+        d = tmp_path / name
+        d.mkdir()
+        monkeypatch.setattr(pipeline, attr, d)
+    monkeypatch.setattr(pipeline, "check_tools", lambda: None)
+    monkeypatch.setattr(pipeline, "upscale", lambda img, scale=4, model="": img)
+    src = tmp_path / "input" / "toi.png"
+    _poster_on_black(src)
+
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--ink", "black", str(src)]) == 1
+    assert "không thấy gì" in capsys.readouterr().out
+    assert not list((tmp_path / "output").glob("*.png"))
+    assert src.exists(), "--keep-input phải giữ ảnh lại để đổi màu mực rồi chạy lại"
+
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--ink", "white", str(src)]) == 0
+    out = np.asarray(Image.open(tmp_path / "output" / "toi_240x240_center_ink-white.png"))
+    ink = out[:, :, 3] > 0
+    assert ink.any()
+    assert {tuple(c) for c in out[:, :, :3][ink].reshape(-1, 3)} == {(255, 255, 255)}
+
+
+def test_keep_input_leaves_a_failed_image_where_it_is(tmp_path, monkeypatch):
+    """Trên trang, ảnh lỗi bị chuyển sang failed/ sẽ biến mất khỏi danh sách và hết đường sửa."""
+    for name, attr in (("input", "INPUT_DIR"), ("output", "OUTPUT_DIR"),
+                       ("work", "WORK_DIR"), ("review", "REVIEW_DIR")):
+        d = tmp_path / name
+        d.mkdir()
+        monkeypatch.setattr(pipeline, attr, d)
+    monkeypatch.setattr(pipeline, "check_tools", lambda: None)
+    (tmp_path / "input" / "hong.png").write_text("không phải ảnh")
+
+    assert pipeline.main(["--keep-input"]) == 1
+    assert (tmp_path / "input" / "hong.png").exists()
+    assert not (tmp_path / "input" / "failed").exists()
+
+    assert pipeline.main([]) == 1
+    assert (tmp_path / "input" / "failed" / "hong.png").exists()

@@ -22,7 +22,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-import numpy as np
 from PIL import Image
 
 import pipeline
@@ -33,44 +32,7 @@ CACHE = pipeline.WORK_DIR / "ui"
 
 
 # ---------------------------------------------------------------- đo chất lượng
-def measure(out: Path, src: Path) -> dict:
-    """Ba con số chấm một file in, tính trên đúng màu áo mà file đó nhắm tới.
-
-    `dac`: phần trăm pixel mực đặc hoàn toàn. Thấp nghĩa là mực mỏng, in ra vải lộ qua.
-    `thua`: phần trăm mực đục nhưng trùng màu áo. Đây là chỗ máy in phủ lót trắng rồi in đè lên
-    vải cùng màu, vừa phí vừa nổi rõ trên áo.
-    `sai_so`: ghép file lên màu áo rồi so với ảnh gốc, tính theo mức trên 255.
-    """
-    o = np.asarray(Image.open(out).convert("RGBA")).astype(np.float32)
-    alpha = o[:, :, 3]
-    ink = alpha > 0
-    if not ink.any():
-        return {"dac": 0.0, "thua": 0.0, "sai_so": None, "shirt": "#808080"}
-    original = Image.open(src).convert("RGB")
-    bg = np.array(pipeline.bg_color(original), dtype=np.float32)
-    a = (alpha / 255.0)[:, :, None]
-    on_shirt = o[:, :, :3] * a + bg * (1 - a)
-    wasted = (alpha > 200) & (np.linalg.norm(on_shirt - bg, axis=2) < 30)
-    kind = pipeline.detect_bg(Image.open(src))
-    shirt = {"black": (20, 20, 22), "white": (245, 245, 245)}.get(kind) or tuple(int(v) for v in bg)
-    return {
-        "dac": round(100 * float((alpha[ink] > 250).mean()), 1),
-        "thua": round(100 * float(wasted.sum()) / float(ink.sum()), 2),
-        "sai_so": round(float(_fidelity(original, kind)), 2),
-        "shirt": "#%02x%02x%02x" % shirt,
-    }
-
-
-def _fidelity(original: Image.Image, kind: str) -> float:
-    """Sai số của riêng bước key, đo ở độ phân giải gốc nên không lẫn sai số căn ảnh."""
-    if kind == "none":
-        return 0.0
-    mode = pipeline.key_style(kind, pipeline.is_flat_art(original))
-    keyed = np.asarray(pipeline.key_bg(original, mode)).astype(np.float32)
-    a = keyed[:, :, 3:] / 255.0
-    bg = np.array(pipeline.bg_color(original), dtype=np.float32)
-    src = np.asarray(original).astype(np.float32)
-    return float(np.abs(keyed[:, :, :3] * a + bg * (1 - a) - src).mean())
+measure = pipeline.measure_print  # cùng một phép đo với lệnh ./run.sh --audit
 
 
 # ---------------------------------------------------------------- cờ cho từng ảnh
@@ -184,7 +146,7 @@ class Runner:
                     self.done.append(name)
             except Exception:  # noqa: BLE001 - một ảnh hỏng không được làm chết cả hàng
                 with self.lock:
-                    self.errors[name] = traceback.format_exc(limit=3)
+                    self.errors[name] = traceback.format_exc()  # đủ traceback: trang hiện được cả
             finally:
                 with self.lock:
                     self.busy.discard(name)

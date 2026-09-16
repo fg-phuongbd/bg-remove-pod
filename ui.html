@@ -74,6 +74,16 @@
   #nums div { font-size: 12px; color: var(--dim); }
   #nums b { display: block; font-size: 17px; color: var(--text); font-weight: 600; }
   #msg { padding: 0 16px 10px; color: var(--dim); font-size: 12px; white-space: pre-wrap; }
+  #errs { padding: 0 16px 12px; }
+  #errs:empty { display: none; }
+  #errs details {
+    background: #3a2426; border: 1px solid #7a4448; border-radius: 6px; padding: 8px 10px; margin-top: 8px;
+  }
+  #errs summary { cursor: pointer; color: #ffb4b4; font-size: 12px; font-weight: 600; }
+  #errs pre {
+    margin: 8px 0 0; font-size: 11px; line-height: 1.4; color: #ffd8d8; overflow-x: auto;
+    white-space: pre-wrap; word-break: break-word;
+  }
   .empty { color: var(--dim); font-size: 13px; padding: 20px; text-align: center; }
   a.dl {
     background: var(--panel); color: var(--text); border: 1px solid var(--line); text-decoration: none;
@@ -108,6 +118,13 @@
       </select>
     </label>
     <label>cỡ <input type="number" id="scale" value="100" min="1" max="100" step="1">%</label>
+    <label>mực
+      <select id="ink">
+        <option value="none">giữ nguyên màu</option>
+        <option value="black">một màu đen</option>
+        <option value="white">một màu trắng</option>
+      </select>
+    </label>
     <label><input type="checkbox" id="vector"> vector</label>
     <button id="run">Chạy ảnh đang chọn</button>
     <button id="runall" class="ghost">Chạy tất cả đang chờ</button>
@@ -133,17 +150,20 @@
 
   <div id="nums"></div>
   <div id="msg"></div>
+  <div id="errs"></div>
 </main>
 
 <script>
 const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 const state = { images: [], pick: null, report: null, polling: false, saved: {} };
 
 // Cờ nhớ theo từng ảnh, không phải một bộ chung cho cả lô: ảnh có người cần --fill-holes,
 // poster thì không, và bản in nhỏ cần vị trí riêng. Giữ qua localStorage để đóng trang mở lại
 // vẫn còn.
-const FLAGS = ["size", "fill_holes", "place", "scale", "vector"];
-const DEFAULTS = { size: "4500x5100", fill_holes: false, place: "center", scale: 100, vector: false };
+const FLAGS = ["size", "fill_holes", "place", "scale", "ink", "vector"];
+const DEFAULTS = { size: "4500x5100", fill_holes: false, place: "center", scale: 100,
+                   ink: "none", vector: false };
 try { state.saved = JSON.parse(localStorage.getItem("tsp-settings") || "{}"); } catch (e) { state.saved = {}; }
 
 function readBar() {
@@ -152,6 +172,7 @@ function readBar() {
     fill_holes: $("#fill_holes").checked,
     place: $("#place").value,
     scale: parseFloat($("#scale").value) || 100,
+    ink: $("#ink").value,
     vector: $("#vector").checked,
   };
 }
@@ -161,6 +182,7 @@ function writeBar(s) {
   $("#fill_holes").checked = s.fill_holes;
   $("#place").value = s.place;
   $("#scale").value = s.scale;
+  $("#ink").value = s.ink;
   $("#vector").checked = s.vector;
   hint();
 }
@@ -207,6 +229,7 @@ async function loadList() {
     el.className = "card" + (state.pick === im.name ? " on" : "");
     const s = state.saved[im.name];
     const tag = s ? [s.fill_holes ? "thân hình đặc" : "", s.vector ? "vector" : "",
+                     s.ink && s.ink !== "none" ? "mực " + s.ink : "",
                      (s.place !== "center" || s.scale !== 100) ? `${s.place} ${s.scale}%` : ""]
                      .filter(Boolean).join(" · ") : "";
     el.innerHTML = `<img loading="lazy" src="/src/${encodeURIComponent(im.name)}" alt="">
@@ -285,7 +308,11 @@ async function poll() {
     $("#msg").textContent = st.running
       ? `Đang chạy ${st.current.join(", ")} · còn ${st.left} · xong ${st.done.length}`
       : (st.done.length || errs.length ? `Xong ${st.done.length} ảnh${errs.length ? `, lỗi ${errs.length}` : ""}` : "");
-    if (errs.length) $("#msg").textContent += "\n" + errs.map(([n, e]) => `${n}: ${e.split("\n").slice(-2)[0]}`).join("\n");
+    // Lỗi hiện đủ: một dòng cuối của traceback thường không nói được vì sao.
+    $("#errs").innerHTML = errs.map(([n, e]) => {
+      const first = (e.trim().split("\n").pop() || "").slice(0, 160);
+      return `<details><summary>${esc(n)} — ${esc(first)}</summary><pre>${esc(e)}</pre></details>`;
+    }).join("");
     if (!st.running) break;
     await new Promise(r => setTimeout(r, 1200));
   }
