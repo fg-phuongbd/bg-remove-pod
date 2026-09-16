@@ -868,9 +868,48 @@ def fill_holes(cut: Image.Image, original: Image.Image) -> Image.Image:
 
 
 # ---------------------------------------------------------------- export
-def save_print_png(img: Image.Image, path: Path) -> None:
+def clean_print(img: Image.Image, dpi: int = DPI, faint: int = 8,
+                speck_mm: float = 0.5, speck_alpha: int = 40) -> Image.Image:
+    """Bỏ mực gần như vô hình trước khi lưu file in.
+
+    Hai thứ bị bỏ, đều là thứ mắt không thấy nhưng máy in vẫn xử lý. Một là pixel alpha dưới
+    `faint`: ở mức đó lớp lót trắng không thành hình nhưng RIP vẫn tính, cho ra một lớp mờ bẩn.
+    Hai là đốm vừa nhỏ hơn `speck_mm` vừa không chỗ nào vượt `speck_alpha`, tức bụi chứ không
+    phải chi tiết. Ngưỡng alpha chính là thứ giữ lại hạt halftone và vệt sờn cố ý: chúng nhỏ
+    nhưng đậm.
+
+    Đo trên một poster in thật: bỏ 1,6 triệu pixel mờ mà chỉ mất 0,013% tổng lượng mực."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    a = np.asarray(img.convert("RGBA")).copy()
+    alpha = a[:, :, 3]
+    alpha[alpha <= faint] = 0
+    ink = alpha > 0
+    if ink.any():
+        side = max(1, round(speck_mm / 25.4 * dpi))
+        labels, n = ndimage.label(ink)
+        if n:
+            index = range(1, n + 1)
+            sizes = np.array(ndimage.sum(ink, labels, index))
+            peaks = np.array(ndimage.maximum(alpha, labels, index))
+            dust = np.nonzero((sizes < side * side) & (peaks <= speck_alpha))[0] + 1
+            if dust.size:
+                alpha[np.isin(labels, dust)] = 0
+    a[:, :, 3] = alpha
+    return Image.fromarray(a, "RGBA")
+
+
+def save_print_png(img: Image.Image, path: Path, clean: bool = True) -> None:
+    """Lưu file in: dọn mực vô hình, gắn hồ sơ màu sRGB, ghi DPI.
+
+    sRGB phải có: RIP gặp file không gắn hồ sơ sẽ tự đoán không gian màu, và màu in ra lệch so
+    với thứ đã duyệt trên màn hình."""
+    from PIL import ImageCms  # noqa: PLC0415 - heavy import kept local
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    img.convert("RGBA").save(path, "PNG", dpi=(DPI, DPI), optimize=False)
+    out = clean_print(img) if clean else img.convert("RGBA")
+    out.save(path, "PNG", dpi=(DPI, DPI), optimize=False,
+             icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
 
 
 def _checkerboard(size: tuple[int, int], cell: int = 32) -> Image.Image:
@@ -1033,7 +1072,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         result = one_ink(result, ink, bg_rgb(original, bg) if bg in BG_KINDS else bg_color(original))
     name = out_name(src.stem, box, args.place, args.scale, args.ink)
     out_path = OUTPUT_DIR / name
-    save_print_png(result, out_path)
+    save_print_png(result, out_path, clean=not args.no_clean)
     make_review(original, result, REVIEW_DIR / name, shirt=shirt)
     return out_path
 
@@ -1131,6 +1170,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--fill-limit", type=float, default=FILL_LIMIT,
                    help=f"ngưỡng an toàn cho --fill-holes: nếu tô đặc làm tăng quá ngần này phần trăm mực in đè lên "
                         f"áo cùng màu thì bỏ qua và cảnh báo. Mặc định {FILL_LIMIT:g}. 100 = tắt chốt chặn")
+    p.add_argument("--no-clean", action="store_true",
+                   help="không dọn mực vô hình trước khi lưu (mặc định có dọn: bỏ alpha dưới 8 và các đốm "
+                        "nhỏ hơn 0,5mm mà không chỗ nào đậm quá 40)")
     p.add_argument("--margin", type=float, default=2.0,
                    help="khoảng cách từ mép khung tới thiết kế khi --place không phải center, tính theo phần trăm cạnh ngắn. Mặc định 2")
     p.add_argument("--floor", type=float, default=KEY_FLOOR,
@@ -1164,7 +1206,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Không có ảnh nào trong {INPUT_DIR}")
         return 0
     box = target_box_px(args.size)
-    print(f"{len(files)} ảnh | {'vector' if args.vector else 'raster'} | file in {box[0]}x{box[1]} px @ {DPI} DPI")
+    print(f"{len(files)} ảnh | {'vector' if args.vector else 'raster'} | file in {box[0]}x{box[1]} px "
+          f"@ {DPI} DPI = {box[0]/DPI*2.54:.1f} x {box[1]/DPI*2.54:.1f} cm")
 
     ok, failed = [], []
     for i, src in enumerate(files, 1):

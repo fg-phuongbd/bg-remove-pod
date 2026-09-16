@@ -68,6 +68,7 @@ PAGE_FLAGS = {
     "floor":      ("nâng cao", "sàn màu nền", "màu cách nền dưới ngưỡng này cho trong suốt hẳn"),
     "fill_limit": ("nâng cao", "chặn tô đặc", "bỏ qua tô đặc nếu thêm quá N% mực in đè lên áo"),
     "bg":         ("nâng cao", "ép cách xử lý", "ép thẳng khi nhận diện nền sai"),
+    "no_clean":   ("nâng cao", "giữ mực vô hình", "không dọn alpha dưới 8 và các đốm nhỏ mà mờ"),
 }
 
 

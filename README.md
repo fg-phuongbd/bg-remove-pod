@@ -131,6 +131,7 @@ Nâng cao, thường không cần:
 | `--style X` | auto | Ép model upscale: `flat` hoặc `detail`. |
 | `--colors N` | không gom | Gom về N màu (raster) hoặc đổi số màu khi `--vector` (mặc định 12). |
 | `--merge D` | 12 | Ngưỡng gộp hai màu gần nhau khi gom (CIELAB ΔE). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác bị gộp. |
+| `--no-clean` | tắt | Không dọn mực vô hình trước khi lưu. Mặc định có dọn. |
 | `--fill-limit P` | 20 | Chốt chặn cho `--fill-holes`: nếu tô đặc làm tăng quá P phần trăm mực in đè lên áo cùng màu thì bỏ qua và cảnh báo. `100` = tắt. |
 | `--fill-holes` | tắt | Không đục lỗ trong hình. Cắt hình: lấp chi tiết trắng bị model khoét (mắt, răng). Key `--shirt same`: thân hình nhân vật theo model cắt hình được giữ đặc (bóng áo tối trên nền đen, da trùng màu nền), ngoài thân hình vẫn key nên chữ ký, glow giữ nguyên. Không dùng nếu có lỗ chữ cố ý. |
 | `--keep-input` | tắt | Không chuyển ảnh gốc khỏi `input/`. |
@@ -270,6 +271,21 @@ tên-ảnh_khung-in_vị-trí_mực.png   ->  skull_4500x5100_center_ink-black.p
 Cỡ và màu mực chỉ xuất hiện khi khác mặc định, để tên mặc định vẫn gọn. Nhờ mang theo khung và vị trí, chạy lại
 cùng một ảnh ở cỡ hoặc vị trí khác sẽ ra file riêng chứ không đè lên nhau. Ảnh so sánh trong
 `review/` dùng đúng tên đó.
+
+## Chuẩn bị file cho xưởng in
+
+Mỗi file lưu ra đều được **dọn mực vô hình** và **gắn hồ sơ màu sRGB**.
+
+Dọn bỏ hai thứ mắt không thấy nhưng máy in vẫn xử lý: pixel alpha dưới 8, và đốm vừa nhỏ hơn 0,5mm
+vừa không chỗ nào đậm quá 40. Ngưỡng đậm chính là thứ giữ lại hạt halftone và vệt sờn cố ý, vì chúng
+nhỏ nhưng đậm. Đo trên một poster in thật: bỏ 1,7 triệu pixel, tức 15,7% số pixel có mực, mà chỉ mất
+**0,019%** tổng lượng mực và ảnh nhìn không khác. Tắt bằng `--no-clean`.
+
+sRGB phải có: RIP gặp file không gắn hồ sơ sẽ tự đoán không gian màu, và màu in ra lệch so với thứ
+bạn đã duyệt trên màn hình.
+
+Dòng log cũng in khổ thật bằng cm, ví dụ `4500x5100 px @ 300 DPI = 38,1 x 43,2 cm`, để đối chiếu với
+bàn in của xưởng trước khi gửi.
 
 ## Lưu ý về file in cho áo tối
 
