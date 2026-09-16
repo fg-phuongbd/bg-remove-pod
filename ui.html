@@ -313,6 +313,7 @@ function showNums(r) {
   $("#nums").innerHTML = `
     <div>mực đặc<b>${r.dac}%</b></div>
     <div>mực trùng màu áo<b>${r.thua}%</b></div>
+    <div title="dưới 40% độ phủ: in DTF dễ bong">phủ thấp<b${r.phu_thap > 5 ? ' style="color:#ffd479"' : ''}>${r.phu_thap}%</b></div>
     <div>sai số khi in<b>${r.sai_so ?? "—"}</b></div>
     <div>màu áo<b style="font-size:13px">${r.shirt}</b></div>
     <div>tên file<b style="font-size:12px">${r.out || "—"}</b></div>`;
@@ -376,12 +377,12 @@ $("#auditbtn").onclick = async () => {
     const rows = await api("/api/audit");
     const avg = k => (rows.reduce((s, r) => s + (r[k] || 0), 0) / (rows.length || 1)).toFixed(2);
     $("#audit").innerHTML = rows.length ? `<table>
-      <tr><th>đặc %</th><th>thừa %</th><th>sai số</th><th>file</th></tr>
+      <tr><th>đặc %</th><th title="dưới 40% độ phủ: in DTF dễ bong">phủ thấp %</th><th>thừa %</th><th>sai số</th><th>file</th></tr>
       ${rows.map(r => `<tr class="${r.why.length ? "warn" : ""}">
-        <td>${r.dac}</td><td>${r.thua}</td><td>${r.sai_so ?? "—"}</td>
+        <td>${r.dac}</td><td>${r.phu_thap}</td><td>${r.thua}</td><td>${r.sai_so ?? "—"}</td>
         <td>${esc(r.name)}${r.why.length ? `<div class="why">${r.why.map(esc).join("<br>")}</div>` : ""}</td>
       </tr>`).join("")}
-      <tr><td>${avg("dac")}</td><td>${avg("thua")}</td><td>${avg("sai_so")}</td>
+      <tr><td>${avg("dac")}</td><td>${avg("phu_thap")}</td><td>${avg("thua")}</td><td>${avg("sai_so")}</td>
           <td>trung bình của ${rows.length} file</td></tr></table>`
       : '<div class="empty">Chưa có file in nào để chấm.</div>';
   } catch (e) { $("#msg").textContent = e.message; }

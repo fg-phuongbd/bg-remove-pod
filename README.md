@@ -84,6 +84,7 @@ trình con Real-ESRGAN nên chạy vài ảnh một lúc rút ngắn đáng kể
 |---|---|
 | mực đặc | phần trăm pixel đục hoàn toàn. Thấp nghĩa là mực mỏng, in ra vải lộ qua. |
 | mực trùng màu áo | phần trăm mực đục nhưng cùng màu áo, tức chỗ máy phủ lót trắng rồi in đè lên vải. Càng thấp càng tốt. |
+| phủ thấp | phần trăm mực nằm dưới 40% độ phủ. **In DTF** thì vùng đó nhận ít bột keo nên dễ bong; in DTG có lót trắng thì không sao. |
 | sai số khi in | ghép file lên màu áo rồi so với ảnh gốc, tính theo mức trên 255. |
 
 Ảnh gốc được giữ nguyên tại chỗ, không bị chuyển sang `input/done/`, để chạy lại cùng một ảnh với cờ
@@ -131,6 +132,7 @@ Nâng cao, thường không cần:
 | `--style X` | auto | Ép model upscale: `flat` hoặc `detail`. |
 | `--colors N` | không gom | Gom về N màu (raster) hoặc đổi số màu khi `--vector` (mặc định 12). |
 | `--merge D` | 12 | Ngưỡng gộp hai màu gần nhau khi gom (CIELAB ΔE). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác bị gộp. |
+| `--dtf-warn P` | 5 | Cảnh báo khi quá P phần trăm diện tích mực nằm dưới 40% độ phủ, mức mà in DTF dễ bong. `100` = tắt. |
 | `--no-clean` | tắt | Không dọn mực vô hình trước khi lưu. Mặc định có dọn. |
 | `--fill-limit P` | 20 | Chốt chặn cho `--fill-holes`: nếu tô đặc làm tăng quá P phần trăm mực in đè lên áo cùng màu thì bỏ qua và cảnh báo. `100` = tắt. |
 | `--fill-holes` | tắt | Không đục lỗ trong hình. Cắt hình: lấp chi tiết trắng bị model khoét (mắt, răng). Key `--shirt same`: thân hình nhân vật theo model cắt hình được giữ đặc (bóng áo tối trên nền đen, da trùng màu nền), ngoài thân hình vẫn key nên chữ ký, glow giữ nguyên. Không dùng nếu có lỗ chữ cố ý. |
@@ -286,6 +288,24 @@ bạn đã duyệt trên màn hình.
 
 Dòng log cũng in khổ thật bằng cm, ví dụ `4500x5100 px @ 300 DPI = 38,1 x 43,2 cm`, để đối chiếu với
 bàn in của xưởng trước khi gửi.
+
+## Cảnh báo cho in DTF
+
+Vùng mực dưới **40% độ phủ** nhận ít bột keo nên dễ bong sau vài lần giặt. In DTG có lót trắng thì
+không sao, nhưng in DTF thì đáng lo.
+
+Pipeline đo tỉ lệ đó cho từng file và in cảnh báo khi vượt 5%:
+
+```
+CẢNH BÁO in DTF: 15% diện tích mực nằm dưới 40% độ phủ (ngưỡng 5%). Vùng đó nhận ít bột keo
+nên dễ bong; in thử một chiếc và giặt vài lần trước khi chạy số lượng.
+```
+
+Con số này cũng là một cột trong `./run.sh --audit` và hiện cạnh ba con số kia trên trang, tô vàng
+khi vượt ngưỡng. Đổi ngưỡng bằng `--dtf-warn`, đặt `100` để tắt.
+
+Đo trên một bộ 26 thiết kế: trung vị 0,9%, còn bốn tấm poster có halftone và quầng sáng rơi vào
+9,2 đến 15,7%. Ngưỡng 5 nằm giữa hai nhóm đó.
 
 ## Lưu ý về file in cho áo tối
 

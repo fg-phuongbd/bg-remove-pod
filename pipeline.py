@@ -31,6 +31,8 @@ DPI = 300
 DEFAULT_SIZE = "4500x5100"  # px; Printful/Merch-style print file (38.1 x 43.2 cm at 300 DPI)
 REMBG_MODEL = "birefnet-general"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+DTF_COVERAGE = 102  # dưới 40% độ phủ: vùng nhận ít bột keo khi in DTF, dễ bong sau vài lần giặt
+DTF_WARN = 5.0  # cảnh báo khi vùng phủ thấp vượt quá ngần này phần trăm diện tích mực
 FILL_LIMIT = 20.0  # --fill-holes bị bỏ qua nếu nó thêm quá ngần này phần trăm mực trùng màu áo
 SOLID_SHARE = 0.5  # share of same-colored neighbours that makes a pixel part of a flat area
 KEY_FLOOR = 32.0  # default for --floor: colors closer than this to the background are shirt, not ink
@@ -938,11 +940,20 @@ def make_review(original: Image.Image, result: Image.Image, path: Path, height: 
 
 
 # ---------------------------------------------------------------- chấm chất lượng
+def low_coverage(img: Image.Image) -> float:
+    """Phần trăm diện tích mực nằm dưới 40% độ phủ, tính trên chính file in."""
+    alpha = np.asarray(img.convert("RGBA"))[:, :, 3]
+    ink = alpha > 0
+    return 100.0 * float((alpha[ink] < DTF_COVERAGE).mean()) if ink.any() else 0.0
+
+
 def measure_print(out: Path, src: Path) -> dict:
     """Ba con số chấm một file in, tính trên đúng màu áo mà file đó nhắm tới.
 
     `dac`: phần trăm pixel mực đặc hoàn toàn. Thấp nghĩa là mực mỏng, in ra vải lộ qua. Đọc theo
     loại thiết kế: poster halftone thấp là đúng, logo phẳng thấp là đáng ngờ.
+    `phu_thap`: phần trăm mực nằm dưới 40% độ phủ. In DTF thì vùng đó nhận ít bột keo nên dễ bong
+    sau vài lần giặt; in DTG có lót trắng thì không sao.
     `thua`: phần trăm mực đục nhưng trùng màu áo, tức chỗ máy phủ lót trắng rồi in đè lên vải.
     `sai_so`: ghép file lên màu áo rồi so với ảnh gốc, theo mức trên 255.
     """
@@ -960,6 +971,7 @@ def measure_print(out: Path, src: Path) -> dict:
     shirt = {"black": (20, 20, 22), "white": (245, 245, 245)}.get(kind) or tuple(int(v) for v in bg)
     return {
         "dac": round(100 * float((alpha[ink] > 250).mean()), 1),
+        "phu_thap": round(100 * float((alpha[ink] < DTF_COVERAGE).mean()), 1),
         "thua": round(100 * float(wasted.sum()) / float(ink.sum()), 2),
         "sai_so": round(_key_fidelity(original, kind), 2),
         "shirt": "#%02x%02x%02x" % shirt,
@@ -1073,6 +1085,11 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     name = out_name(src.stem, box, args.place, args.scale, args.ink)
     out_path = OUTPUT_DIR / name
     save_print_png(result, out_path, clean=not args.no_clean)
+    low = low_coverage(Image.open(out_path))
+    if low > args.dtf_warn:
+        print(f"  CẢNH BÁO in DTF: {low:.0f}% diện tích mực nằm dưới 40% độ phủ (ngưỡng {args.dtf_warn:g}%). "
+              f"Vùng đó nhận ít bột keo nên dễ bong; in thử một chiếc và giặt vài lần trước khi chạy số lượng. "
+              f"In DTG có lót trắng thì không sao.")
     make_review(original, result, REVIEW_DIR / name, shirt=shirt)
     return out_path
 
@@ -1089,6 +1106,9 @@ def audit_rows(sources: list[Path]) -> list[dict]:
             why = []
             if r["thua"] > 20:
                 why.append("mực in đè lên áo cùng màu quá nhiều, xem lại --fill-holes")
+            if r["phu_thap"] > DTF_WARN:
+                why.append(f"{r['phu_thap']:.0f}% diện tích mực dưới 40% độ phủ, in DTF dễ bong, "
+                           f"nên in thử một chiếc và giặt vài lần trước khi chạy số lượng")
             if (r["sai_so"] or 0) > 5:
                 why.append("sai số khi in cao, mở ảnh so sánh xem bằng mắt")
             if r["dac"] < 50:
@@ -1104,10 +1124,11 @@ def audit(sources: list[Path]) -> int:
     if not rows:
         print(f"Chưa có file in nào trong {OUTPUT_DIR}")
         return 0
-    print(f"{'đặc%':>6s} {'thừa%':>7s} {'sai số':>7s}  file")
+    print(f"{'đặc%':>6s} {'phủ thấp%':>10s} {'thừa%':>7s} {'sai số':>7s}  file")
     for r in rows:
-        print(f"{r['dac']:6.1f} {r['thua']:7.2f} {r['sai_so'] if r['sai_so'] is not None else 0:7.2f}"
-              f"  {r['name'][:56]}{'  <--' if r['why'] else ''}")
+        print(f"{r['dac']:6.1f} {r['phu_thap']:10.1f} {r['thua']:7.2f}"
+              f" {r['sai_so'] if r['sai_so'] is not None else 0:7.2f}"
+              f"  {r['name'][:50]}{'  <--' if r['why'] else ''}")
     d = [r["dac"] for r in rows]
     t = [r["thua"] for r in rows]
     f = [r["sai_so"] or 0.0 for r in rows]
@@ -1170,6 +1191,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--fill-limit", type=float, default=FILL_LIMIT,
                    help=f"ngưỡng an toàn cho --fill-holes: nếu tô đặc làm tăng quá ngần này phần trăm mực in đè lên "
                         f"áo cùng màu thì bỏ qua và cảnh báo. Mặc định {FILL_LIMIT:g}. 100 = tắt chốt chặn")
+    p.add_argument("--dtf-warn", type=float, default=DTF_WARN,
+                   help=f"cảnh báo khi quá ngần này phần trăm diện tích mực nằm dưới 40%% độ phủ, mức mà in DTF "
+                        f"dễ bong. Mặc định {DTF_WARN:g}. 100 = tắt cảnh báo")
     p.add_argument("--no-clean", action="store_true",
                    help="không dọn mực vô hình trước khi lưu (mặc định có dọn: bỏ alpha dưới 8 và các đốm "
                         "nhỏ hơn 0,5mm mà không chỗ nào đậm quá 40)")

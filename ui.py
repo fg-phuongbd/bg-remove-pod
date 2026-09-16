@@ -69,6 +69,7 @@ PAGE_FLAGS = {
     "fill_limit": ("nâng cao", "chặn tô đặc", "bỏ qua tô đặc nếu thêm quá N% mực in đè lên áo"),
     "bg":         ("nâng cao", "ép cách xử lý", "ép thẳng khi nhận diện nền sai"),
     "no_clean":   ("nâng cao", "giữ mực vô hình", "không dọn alpha dưới 8 và các đốm nhỏ mà mờ"),
+    "dtf_warn":   ("nâng cao", "cảnh báo DTF %", "báo khi quá N% diện tích mực dưới 40% độ phủ"),
 }
 
 

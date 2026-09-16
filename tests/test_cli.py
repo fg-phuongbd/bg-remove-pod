@@ -275,3 +275,43 @@ def test_keep_input_leaves_a_failed_image_where_it_is(tmp_path, monkeypatch):
 
     assert pipeline.main([]) == 1
     assert (tmp_path / "input" / "failed" / "hong.png").exists()
+
+
+def test_low_coverage_warns_about_dtf(tmp_path, monkeypatch, capsys):
+    """Vùng dưới 40% độ phủ nhận ít bột keo khi in DTF, nên phải được báo trước."""
+    import numpy as np
+
+    for name, attr in (("input", "INPUT_DIR"), ("output", "OUTPUT_DIR"),
+                       ("work", "WORK_DIR"), ("review", "REVIEW_DIR")):
+        d = tmp_path / name
+        d.mkdir()
+        monkeypatch.setattr(pipeline, attr, d)
+    monkeypatch.setattr(pipeline, "check_tools", lambda: None)
+    monkeypatch.setattr(pipeline, "upscale", lambda img, scale=4, model="": img)
+
+    # Nền đen, một lõi sáng và quầng sáng rộng quanh nó. Quầng mới là thứ cho ra mực phủ thấp:
+    # một mảng xám phẳng thì bước nâng mảng màu khối sẽ đưa lên đặc, đúng như nó phải làm.
+    from PIL import ImageDraw, ImageFilter
+    im = Image.new("RGB", (240, 240), (0, 0, 0))
+    ImageDraw.Draw(im).ellipse((80, 80, 160, 160), fill=(255, 255, 255))
+    im = im.filter(ImageFilter.GaussianBlur(18))
+    src = tmp_path / "input" / "mong.png"
+    im.save(src)
+
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--bg", "black", str(src)]) == 0
+    assert "CẢNH BÁO in DTF" in capsys.readouterr().out
+
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--bg", "black",
+                          "--dtf-warn", "100", str(src)]) == 0
+    assert "CẢNH BÁO in DTF" not in capsys.readouterr().out
+
+
+def test_low_coverage_reads_the_print_file():
+    import numpy as np
+
+    a = np.zeros((10, 10, 4), np.uint8)
+    a[0:5, :, 3] = 255          # đặc
+    a[5:8, :, 3] = 60           # dưới 40% độ phủ
+    img = Image.fromarray(a, "RGBA")
+    assert 35 < pipeline.low_coverage(img) < 40      # 30 trên 80 pixel có mực
+    assert pipeline.low_coverage(Image.new("RGBA", (4, 4), (0, 0, 0, 0))) == 0.0
