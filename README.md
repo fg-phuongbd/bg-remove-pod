@@ -54,6 +54,8 @@ cp examples/mascot.jpg input/ && ./run.sh --vector --fill-holes
 
 ## Trang xem tại máy: `./run.sh --ui`
 
+Hướng dẫn dùng từng bước: [docs/huong-dan-ui.md](docs/huong-dan-ui.md).
+
 ```bash
 ./run.sh --ui
 ```
