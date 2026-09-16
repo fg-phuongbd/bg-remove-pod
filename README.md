@@ -52,56 +52,96 @@ Thử ngay với ảnh mẫu (minh họa phẳng nền trắng):
 cp examples/mascot.jpg input/ && ./run.sh --vector --fill-holes
 ```
 
-## Trang xem tại máy: `./run.sh --ui`
-
-Hướng dẫn dùng từng bước: [docs/huong-dan-ui.md](docs/huong-dan-ui.md).
+## Trang chạy tại máy: `./run.sh --ui`
 
 ```bash
 ./run.sh --ui
 ```
 
-Mở một trang tại `127.0.0.1:8765`, chạy bằng thư viện có sẵn của Python, không thêm phụ thuộc nào.
-Trang làm ba việc mà dòng lệnh làm không tốt:
+Mở một trang tại `127.0.0.1:8765`, chạy bằng thư viện có sẵn của Python, không thêm phụ thuộc nào,
+không gửi ảnh đi đâu.
 
-**Xem trên đúng màu áo sẽ in.** Ô chọn nền có bốn lựa chọn: màu áo, xám, checkerboard, trắng. Mặc
-định là màu áo. File cho áo tối phần lớn là mực sáng, nên xem trên nền trắng hay checkerboard sáng
-thì nét trắng biến mất và trông như thủng trong khi không hề thủng.
+### Năm bước
 
-**Cờ nhớ theo từng ảnh.** Ảnh có người bật `thân hình đặc`, poster thì không, bản in nhỏ đặt vị trí
-riêng. Mỗi thẻ ảnh hiện cờ của nó, và trình duyệt nhớ lại khi bạn mở trang lần sau.
+**1. Thêm ảnh.** Kéo thả vào bất cứ đâu trên trang, hoặc chép vào `input/` rồi tải lại trang. Nhận
+png, jpg, webp. Ảnh gốc được giữ nguyên tại chỗ, không bị chuyển sang `input/done/`, nên chạy lại
+cùng một ảnh với cờ khác bao nhiêu lần cũng được.
 
-Trang có **đủ mọi cờ của dòng lệnh**: tám cờ hay dùng trên thanh trên cùng, sáu cờ còn lại trong
-khối `cờ nâng cao`. Danh sách và giá trị mặc định lấy thẳng từ `parse_args`, nên thêm cờ mới vào
-dòng lệnh là trang có ngay, không có chuyện hai bên lệch nhau. Nút **Chấm cả lô** hiện bảng ba con
-số cho mọi file in, đánh dấu vàng ảnh cần xem lại kèm lý do, giống `./run.sh --audit`.
+**2. Chọn ảnh, xem cờ của nó.** Bấm vào thẻ bên trái. Thanh cờ trên cùng luôn hiện cờ *của riêng ảnh
+đang chọn*, không phải cờ chung. Dưới tên mỗi thẻ ghi những cờ khác mặc định, ví dụ
+`áo other · đặt top-right · gom màu 8`. Trình duyệt nhớ những cờ này cả khi bạn đóng trang.
 
-**Kéo thả ảnh** vào bất cứ đâu trên trang để thêm vào `input/`. **Nút Tải file in** tải bản đầy đủ
-300 DPI. Ô **cùng lúc** đặt số ảnh chạy song song, mặc định 2: phần lớn thời gian một ảnh nằm ở tiến
-trình con Real-ESRGAN nên chạy vài ảnh một lúc rút ngắn đáng kể, nhưng mỗi ảnh giữ vài mảng cỡ
-5000 x 5000 trong bộ nhớ nên đừng đẩy quá cao.
+**3. Đặt cờ theo loại thiết kế.** Hầu hết thời gian chỉ cần một cờ; phần còn lại pipeline tự quyết
+và in ra dòng log cho biết nó chọn gì.
 
-**Ô kết luận** nằm ngay dưới ảnh, trả lời thẳng file có in được không:
+| Thiết kế | Đặt gì |
+|---|---|
+| Đồ họa phẳng: chữ, logo, huy hiệu | để nguyên mặc định |
+| Poster vẽ tay, có glow hoặc halftone | để nguyên mặc định |
+| Ảnh chụp người hoặc nhân vật | bật `thân hình đặc` |
+| Ảnh chụp người kèm chữ đồ họa | bật `thân hình đặc` |
+| Bản in nhỏ đặt ở một góc | `đặt` = top-right, `cỡ` = 26 |
+| In một màu mực | `mực` = đen hoặc trắng |
+
+Tám cờ hay dùng nằm trên thanh trên cùng, sáu cờ còn lại trong khối `cờ nâng cao`. Danh sách và giá
+trị mặc định lấy thẳng từ `parse_args`, nên thêm cờ mới vào dòng lệnh là trang có ngay.
+
+**4. Chạy.** *Chạy ảnh đang chọn* làm một ảnh, *Chạy tất cả đang chờ* làm hết những ảnh chưa xử lý,
+mỗi ảnh dùng cờ riêng của nó. Ô `cùng lúc` đặt số ảnh chạy song song, mặc định 2; đẩy lên 3 thì nhanh
+hơn rõ, cao hơn nữa thì máy đuối vì mỗi ảnh giữ vài mảng cỡ 5000 x 5000 trong bộ nhớ. Mỗi ảnh mất
+khoảng 14 giây, hoặc 45 giây nếu bật `thân hình đặc` vì phải chạy thêm model cắt hình.
+
+**5. Đọc kết luận.** Ô màu trả lời thẳng, bốn con số bên cạnh là dẫn chứng.
 
 | Mức | Nghĩa |
 |---|---|
-| Đủ điều kiện in | không thấy vấn đề nào |
+| Đủ điều kiện in | không thấy vấn đề nào, tải file về và gửi xưởng |
 | In được, nên xem lại | phủ thấp vượt ngưỡng DTF, hoặc mực mỏng bất thường |
 | Không dùng được | file rỗng, mực in đè lên áo cùng màu quá 20%, hoặc sai số khi in quá 5 |
 
-Luật quyết định nằm ở `print_verdict` trong `pipeline.py`, dùng chung cho cả `--audit`, nên dòng lệnh
-và trang không bao giờ nói khác nhau.
+Luật quyết định nằm ở `print_verdict` trong `pipeline.py`, dùng chung với `--audit`, nên dòng lệnh và
+trang không bao giờ nói khác nhau.
 
-**Bốn con số chấm chất lượng** hiện cạnh ô đó:
+### Bốn con số
 
-| Số | Nghĩa |
-|---|---|
-| mực đặc | phần trăm pixel đục hoàn toàn. Thấp nghĩa là mực mỏng, in ra vải lộ qua. |
-| mực trùng màu áo | phần trăm mực đục nhưng cùng màu áo, tức chỗ máy phủ lót trắng rồi in đè lên vải. Càng thấp càng tốt. |
-| phủ thấp | phần trăm mực nằm dưới 40% độ phủ. **In DTF** thì vùng đó nhận ít bột keo nên dễ bong; in DTG có lót trắng thì không sao. |
-| sai số khi in | ghép file lên màu áo rồi so với ảnh gốc, tính theo mức trên 255. |
+| Số | Nghĩa | Đọc thế nào |
+|---|---|---|
+| mực đặc | phần trăm pixel đục hoàn toàn | So trong cùng loại thiết kế. Logo phẳng dưới 85% là đáng ngờ; poster halftone 42% vẫn đúng. |
+| mực trùng màu áo | mực đục nhưng cùng màu áo, tức chỗ máy phủ lót trắng rồi in đè lên vải | Dưới 5% thì bỏ qua. Trên 20% gần như chắc là bật `thân hình đặc` nhầm cho poster. |
+| phủ thấp | mực nằm dưới 40% độ phủ | Cột quan trọng nhất với **in DTF**: vùng đó nhận ít bột keo nên dễ bong. Trên 5% thì in thử một chiếc, giặt vài lần rồi hãy chạy số lượng. In DTG có lót trắng thì không sao. |
+| sai số khi in | ghép file lên màu áo rồi so với ảnh gốc, thang 0 đến 255 | Dưới 1 là mắt không thấy. Trên 5 thì mở ảnh so sánh trong `review/` xem bằng mắt. |
 
-Ảnh gốc được giữ nguyên tại chỗ, không bị chuyển sang `input/done/`, để chạy lại cùng một ảnh với cờ
-khác được nhiều lần.
+Nút **Chấm cả lô** hiện bảng này cho mọi file in một lượt, tô vàng những file cần xem lại kèm lý do.
+Bấm lần nữa để đóng. Ngoài dòng lệnh: `./run.sh --audit`.
+
+### Ba cái bẫy
+
+**Đừng chấm trên nền trắng.** Thiết kế cho áo tối phần lớn là mực sáng. Trên nền trắng hay
+checkerboard sáng, nét trắng biến mất và trông như thủng lỗ trong khi không hề thủng. Luôn để ô
+**nền xem** ở **màu áo**. Khoảng trống giữa các nét chữ vốn là nền, thấy checkerboard ở đó là đúng.
+
+**Đặt vị trí mà để cỡ 100% thì không thấy gì đổi.** Ở cỡ 100% thiết kế đã lấp kín khung, neo vào góc
+nào cũng như nhau vì không còn chỗ để dịch. Giảm cỡ xuống, ví dụ 26%. Trang có dòng nhắc màu vàng
+ngay khi bạn rơi vào trường hợp này.
+
+**Sửa code thì phải khởi động lại trang.** Trang được nạp vào bộ nhớ lúc chạy `./run.sh --ui`. Nhấn
+`Ctrl+C` ở cửa sổ terminal rồi chạy lại. Nếu nó báo cổng đang bận, tức là vẫn còn một trang mở ở
+`127.0.0.1:8765`.
+
+### Khi có lỗi
+
+Ảnh lỗi hiện thành một khối đỏ dưới cùng trang; bấm vào để mở đủ traceback, không phải một dòng cụt.
+Ảnh vẫn nằm nguyên trong danh sách nên bạn đổi cờ rồi chạy lại ngay được.
+
+Hai lỗi hay gặp nhất đều tự giải thích: chọn màu mực gần trùng màu nền ảnh thì bị từ chối vì in ra
+không thấy gì, và bật `thân hình đặc` cho poster thì pipeline tự bỏ qua kèm dòng cảnh báo, file vẫn
+ra đúng.
+
+### Lấy file
+
+Nút **Tải file in** tải bản đầy đủ 300 DPI, tên mang theo khung in và vị trí, xem mục
+**Tên file in**. Khung 4500 x 5100 ở 300 DPI là 38,1 x 43,2 cm; đối chiếu với bàn in của xưởng trước
+khi gửi.
 
 ## Một câu hỏi duy nhất: in lên áo màu gì?
 
