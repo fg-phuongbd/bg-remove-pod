@@ -68,6 +68,11 @@ thì nét trắng biến mất và trông như thủng trong khi không hề th�
 **Cờ nhớ theo từng ảnh.** Ảnh có người bật `thân hình đặc`, poster thì không, bản in nhỏ đặt vị trí
 riêng. Mỗi thẻ ảnh hiện cờ của nó, và trình duyệt nhớ lại khi bạn mở trang lần sau.
 
+Trang có **đủ mọi cờ của dòng lệnh**: tám cờ hay dùng trên thanh trên cùng, sáu cờ còn lại trong
+khối `cờ nâng cao`. Danh sách và giá trị mặc định lấy thẳng từ `parse_args`, nên thêm cờ mới vào
+dòng lệnh là trang có ngay, không có chuyện hai bên lệch nhau. Nút **Chấm cả lô** hiện bảng ba con
+số cho mọi file in, đánh dấu vàng ảnh cần xem lại kèm lý do, giống `./run.sh --audit`.
+
 **Kéo thả ảnh** vào bất cứ đâu trên trang để thêm vào `input/`. **Nút Tải file in** tải bản đầy đủ
 300 DPI. Ô **cùng lúc** đặt số ảnh chạy song song, mặc định 2: phần lớn thời gian một ảnh nằm ở tiến
 trình con Real-ESRGAN nên chạy vài ảnh một lúc rút ngắn đáng kể, nhưng mỗi ảnh giữ vài mảng cỡ

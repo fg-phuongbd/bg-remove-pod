@@ -229,3 +229,42 @@ def test_runner_runs_jobs_in_parallel(workspace, monkeypatch):
     st = r.status()
     assert sorted(st["done"]) == ["a.png", "b.png", "c.png", "d.png"], st["errors"]
     assert peak[0] == 3, f"chạy song song tối đa {peak[0]} thay vì 3"
+
+
+def test_page_config_covers_every_flag_the_cli_has(server):
+    """Trang phải có đủ cờ của dòng lệnh, và mặc định phải đọc từ chính parse_args."""
+    cfg = json.loads(get(server, "/api/config")[1])
+    names = {f["name"] for f in cfg["flags"]}
+    cli = set(vars(pipeline.parse_args([]))) - {"files", "keep_input", "ui", "audit"}
+    assert names == cli, f"lệch: {cli ^ names}"
+    by = {f["name"]: f for f in cfg["flags"]}
+    assert by["size"]["default"] == pipeline.parse_args([]).size
+    assert by["floor"]["default"] == pipeline.KEY_FLOOR
+    assert by["place"]["choices"] == list(pipeline.PLACES)
+    assert by["colors"]["default"] is None          # để trống nghĩa là không gom
+    assert {f["group"] for f in cfg["flags"]} == {"chính", "nâng cao"}
+
+
+def test_every_page_flag_is_accepted_by_the_runner(server, workspace):
+    """Cờ nào trang hiện thì make_args phải nhận, nếu không bấm Chạy sẽ hỏng giữa chừng."""
+    cfg = json.loads(get(server, "/api/config")[1])
+    settings = {f["name"]: f["default"] for f in cfg["flags"]}
+    args = ui.make_args(settings)
+    for name, value in settings.items():
+        assert getattr(args, name) == value
+
+
+def test_audit_endpoint_grades_the_batch(server, workspace):
+    src = workspace / "input" / "a.png"
+    _design(src)
+    pipeline.process_one(src, ui.make_args({"size": "300x300"}))
+    rows = json.loads(get(server, "/api/audit")[1])
+    assert [r["name"] for r in rows] == ["a_300x300_center.png"]
+    assert rows[0]["dac"] > 80 and rows[0]["why"] == []
+
+    bad = np.zeros((40, 40, 4), np.uint8)
+    bad[..., 3] = 255
+    Image.fromarray(bad, "RGBA").save(workspace / "output" / "a_300x300_top-left.png")
+    rows = json.loads(get(server, "/api/audit")[1])
+    flagged = [r for r in rows if r["why"]]
+    assert len(flagged) == 1 and "fill-holes" in flagged[0]["why"][0]

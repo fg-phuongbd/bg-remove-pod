@@ -1038,42 +1038,47 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     return out_path
 
 
-def audit(sources: list[Path]) -> int:
-    """In bảng chấm cho mọi file in đang có, đánh dấu ảnh cần xem lại bằng mắt.
+def audit_rows(sources: list[Path]) -> list[dict]:
+    """Chấm mọi file in của các ảnh gốc đã cho, kèm lý do cần xem lại, sắp xếp mực mỏng lên trước.
 
-    Trang UI cho ba con số của từng ảnh; bảng này cho cả lô một lượt, để thấy ảnh nào lệch khỏi
-    phần còn lại. Ngưỡng đánh dấu lấy từ số đo thật: mực thừa quá 20% gần như chắc là bật
-    --fill-holes nhầm cho poster, sai số quá 5 thì nên mở ảnh so sánh ra xem."""
+    Ngưỡng đánh dấu lấy từ số đo thật trên một bộ 26 ảnh: mực thừa quá 20% gần như chắc là bật
+    --fill-holes nhầm cho poster, sai số quá 5 thì nên mở ảnh so sánh ra xem bằng mắt."""
     rows = []
     for src in sources:
         for out in sorted(OUTPUT_DIR.glob(f"{glob.escape(src.stem)}_*.png")):
-            rows.append((out.name, measure_print(out, src)))
+            r = dict(measure_print(out, src), name=out.name, src=src.name)
+            why = []
+            if r["thua"] > 20:
+                why.append("mực in đè lên áo cùng màu quá nhiều, xem lại --fill-holes")
+            if (r["sai_so"] or 0) > 5:
+                why.append("sai số khi in cao, mở ảnh so sánh xem bằng mắt")
+            if r["dac"] < 50:
+                why.append("mực mỏng, đúng với poster halftone nhưng đáng ngờ với đồ họa phẳng")
+            r["why"] = why
+            rows.append(r)
+    return sorted(rows, key=lambda r: r["dac"])
+
+
+def audit(sources: list[Path]) -> int:
+    """In bảng chấm cho mọi file in đang có. Trang UI cho từng ảnh; bảng này cho cả lô một lượt."""
+    rows = audit_rows(sources)
     if not rows:
         print(f"Chưa có file in nào trong {OUTPUT_DIR}")
         return 0
     print(f"{'đặc%':>6s} {'thừa%':>7s} {'sai số':>7s}  file")
-    flagged = []
-    for name, r in sorted(rows, key=lambda x: x[1]["dac"]):
-        why = []
-        if r["thua"] > 20:
-            why.append("mực in đè lên áo cùng màu quá nhiều, xem lại --fill-holes")
-        if (r["sai_so"] or 0) > 5:
-            why.append("sai số khi in cao, mở review/ xem bằng mắt")
-        if r["dac"] < 50:
-            why.append("mực mỏng, đúng với poster halftone nhưng đáng ngờ với đồ họa phẳng")
+    for r in rows:
         print(f"{r['dac']:6.1f} {r['thua']:7.2f} {r['sai_so'] if r['sai_so'] is not None else 0:7.2f}"
-              f"  {name[:56]}{'  <--' if why else ''}")
-        if why:
-            flagged.append((name, why))
-    d = [r["dac"] for _, r in rows]
-    t = [r["thua"] for _, r in rows]
-    f = [r["sai_so"] or 0.0 for _, r in rows]
+              f"  {r['name'][:56]}{'  <--' if r['why'] else ''}")
+    d = [r["dac"] for r in rows]
+    t = [r["thua"] for r in rows]
+    f = [r["sai_so"] or 0.0 for r in rows]
     print(f"\n{len(rows)} file | mực đặc tb {sum(d)/len(d):.1f}% | mực thừa tb {sum(t)/len(t):.2f}% | "
           f"sai số tb {sum(f)/len(f):.2f}")
-    for name, why in flagged:
-        print(f"  cần xem: {name[:56]}")
-        for w in why:
-            print(f"      - {w}")
+    for r in rows:
+        if r["why"]:
+            print(f"  cần xem: {r['name'][:56]}")
+            for w in r["why"]:
+                print(f"      - {w}")
     return 0
 
 

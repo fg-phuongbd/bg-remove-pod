@@ -51,6 +51,42 @@ def make_args(settings: dict) -> argparse.Namespace:
     return args
 
 
+# Cờ trang cho chỉnh, kèm nhóm hiện ở đâu. Giá trị mặc định và danh sách lựa chọn đều lấy từ
+# parse_args chứ không chép lại, để trang không bao giờ lệch khỏi dòng lệnh khi CLI đổi.
+PAGE_FLAGS = {
+    "size":       ("chính", "khung in", ""),
+    "shirt":      ("chính", "áo", "in lên áo cùng màu nền ảnh hay khác màu"),
+    "fill_holes": ("chính", "thân hình đặc", "ảnh có người: tô đặc thân hình thay vì đục lỗ"),
+    "place":      ("chính", "đặt", "vị trí thiết kế trên khung in"),
+    "scale":      ("chính", "cỡ %", "thiết kế chiếm bao nhiêu phần trăm khung in"),
+    "margin":     ("chính", "lề %", "khoảng hở từ mép khung khi đặt lệch tâm"),
+    "ink":        ("chính", "mực", "in một màu duy nhất, alpha thành độ phủ"),
+    "vector":     ("chính", "vector", "gom màu rồi trace vector"),
+    "style":      ("nâng cao", "kiểu", "ép model upscale"),
+    "colors":     ("nâng cao", "gom màu", "gom về tối đa N màu, để trống là không gom"),
+    "merge":      ("nâng cao", "ngưỡng gộp", "gộp hai màu gần nhau, CIELAB ΔE"),
+    "floor":      ("nâng cao", "sàn màu nền", "màu cách nền dưới ngưỡng này cho trong suốt hẳn"),
+    "fill_limit": ("nâng cao", "chặn tô đặc", "bỏ qua tô đặc nếu thêm quá N% mực in đè lên áo"),
+    "bg":         ("nâng cao", "ép cách xử lý", "ép thẳng khi nhận diện nền sai"),
+}
+
+
+def page_config() -> dict:
+    """Mặc định và lựa chọn cho từng cờ, đọc thẳng từ bộ phân tích tham số của dòng lệnh."""
+    defaults = vars(pipeline.parse_args([]))
+    choices = {
+        "shirt": ["same", "other", "auto"],
+        "place": list(pipeline.PLACES),
+        "bg": ["auto", *pipeline.BG_KINDS, "ai"],
+        "style": ["auto", "flat", "detail"],
+        "ink": ["none", "black", "white"],
+    }
+    return {"flags": [{"name": k, "group": g, "label": label, "hint": hint,
+                       "default": defaults[k], "choices": choices.get(k),
+                       "kind": type(defaults[k]).__name__}
+                      for k, (g, label, hint) in PAGE_FLAGS.items()]}
+
+
 def list_images() -> list[dict]:
     """Ảnh đang chờ trong input/ và ảnh đã xử lý trong input/done/, mới nhất lên trước."""
     seen: dict[str, dict] = {}
@@ -187,6 +223,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(list_images())
             elif route.path == "/api/status":
                 self._json(RUNNER.status())
+            elif route.path == "/api/config":
+                self._json(page_config())
+            elif route.path == "/api/audit":
+                srcs = [source_path(r["name"]) for r in list_images()]
+                self._json(pipeline.audit_rows(srcs))
             elif parts[0] == "api" and parts[1] == "report" and len(parts) == 3:
                 src = source_path(parts[2])
                 outs = outputs_for(src.stem)

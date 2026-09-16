@@ -85,6 +85,19 @@
     white-space: pre-wrap; word-break: break-word;
   }
   .empty { color: var(--dim); font-size: 13px; padding: 20px; text-align: center; }
+  #flags-main, #flags-adv { display: contents; }
+  #flags-adv { display: flex; gap: 14px; flex-wrap: wrap; padding: 8px 0 2px; }
+  #adv { padding: 8px 16px 0; }
+  #adv summary { cursor: pointer; color: var(--dim); font-size: 12px; }
+  #adv[open] summary { margin-bottom: 4px; }
+  #audit { padding: 0 16px; max-height: 40vh; overflow: auto; }
+  #audit:empty { display: none; }
+  #audit table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  #audit th { text-align: right; color: var(--dim); font-weight: 500; padding: 4px 8px; position: sticky; top: 0; background: var(--chrome); }
+  #audit th:last-child, #audit td:last-child { text-align: left; }
+  #audit td { padding: 3px 8px; text-align: right; border-top: 1px solid var(--line); }
+  #audit tr.warn td { color: #ffd479; }
+  #audit .why { color: #ffd479; font-size: 11px; }
   a.dl {
     background: var(--panel); color: var(--text); border: 1px solid var(--line); text-decoration: none;
     border-radius: 6px; padding: 6px 12px; font-size: 12px;
@@ -108,28 +121,12 @@
 
 <main>
   <div id="bar">
-    <label>khung in <input type="text" id="size" value="4500x5100"></label>
-    <label><input type="checkbox" id="fill_holes"> thân hình đặc</label>
-    <label>đặt
-      <select id="place">
-        <option>center</option><option>top</option><option>bottom</option>
-        <option>left</option><option>right</option><option>top-left</option>
-        <option>top-right</option><option>bottom-left</option><option>bottom-right</option>
-      </select>
-    </label>
-    <label>cỡ <input type="number" id="scale" value="100" min="1" max="100" step="1">%</label>
-    <label>mực
-      <select id="ink">
-        <option value="none">giữ nguyên màu</option>
-        <option value="black">một màu đen</option>
-        <option value="white">một màu trắng</option>
-      </select>
-    </label>
-    <label><input type="checkbox" id="vector"> vector</label>
+    <div id="flags-main"></div>
     <button id="run">Chạy ảnh đang chọn</button>
     <button id="runall" class="ghost">Chạy tất cả đang chờ</button>
     <label>cùng lúc <input type="number" id="workers" value="2" min="1" max="6" step="1"></label>
     <span style="flex:1"></span>
+    <button id="auditbtn" class="ghost">Chấm cả lô</button>
     <a class="dl" id="dl" hidden download>Tải file in</a>
     <label>nền xem
       <select id="bgpick">
@@ -141,12 +138,16 @@
     </label>
   </div>
 
+  <details id="adv"><summary>cờ nâng cao</summary><div id="flags-adv"></div></details>
+
   <div id="hint"></div>
 
   <div id="stage">
     <div class="pane"><h2>ảnh gốc</h2><div class="view" id="srcview"></div></div>
     <div class="pane"><h2>file in, ghép trên nền đã chọn</h2><div class="view" id="outview"></div></div>
   </div>
+
+  <div id="audit"></div>
 
   <div id="nums"></div>
   <div id="msg"></div>
@@ -161,29 +162,50 @@ const state = { images: [], pick: null, report: null, polling: false, saved: {} 
 // Cờ nhớ theo từng ảnh, không phải một bộ chung cho cả lô: ảnh có người cần --fill-holes,
 // poster thì không, và bản in nhỏ cần vị trí riêng. Giữ qua localStorage để đóng trang mở lại
 // vẫn còn.
-const FLAGS = ["size", "fill_holes", "place", "scale", "ink", "vector"];
-const DEFAULTS = { size: "4500x5100", fill_holes: false, place: "center", scale: 100,
-                   ink: "none", vector: false };
+// Cờ dựng từ /api/config, tức từ chính parse_args của dòng lệnh. Thêm cờ mới vào CLI là trang có
+// ngay, không phải chép lại mặc định ở hai nơi rồi lệch nhau.
+let CONFIG = { flags: [] };
+const DEFAULTS = {};
 try { state.saved = JSON.parse(localStorage.getItem("tsp-settings") || "{}"); } catch (e) { state.saved = {}; }
 
+function control(f) {
+  const id = "f_" + f.name;
+  let input;
+  if (f.kind === "bool") {
+    input = `<input type="checkbox" id="${id}">`;
+    return `<label title="${esc(f.hint)}">${input} ${esc(f.label)}</label>`;
+  }
+  if (f.choices) {
+    input = `<select id="${id}">` + f.choices.map(c => `<option>${esc(c)}</option>`).join("") + `</select>`;
+  } else if (f.kind === "float" || f.kind === "NoneType") {
+    input = `<input type="number" id="${id}" step="any" placeholder="mặc định">`;
+  } else {
+    input = `<input type="text" id="${id}">`;
+  }
+  return `<label title="${esc(f.hint)}">${esc(f.label)} ${input}</label>`;
+}
+
 function readBar() {
-  return {
-    size: $("#size").value.trim() || DEFAULTS.size,
-    fill_holes: $("#fill_holes").checked,
-    place: $("#place").value,
-    scale: parseFloat($("#scale").value) || 100,
-    ink: $("#ink").value,
-    vector: $("#vector").checked,
-  };
+  const out = {};
+  for (const f of CONFIG.flags) {
+    const el = $("#f_" + f.name);
+    if (!el) continue;
+    if (f.kind === "bool") out[f.name] = el.checked;
+    else if (f.kind === "float") out[f.name] = el.value === "" ? f.default : parseFloat(el.value);
+    else if (f.kind === "NoneType") out[f.name] = el.value === "" ? null : parseFloat(el.value);
+    else out[f.name] = el.value.trim() || f.default;
+  }
+  return out;
 }
 
 function writeBar(s) {
-  $("#size").value = s.size;
-  $("#fill_holes").checked = s.fill_holes;
-  $("#place").value = s.place;
-  $("#scale").value = s.scale;
-  $("#ink").value = s.ink;
-  $("#vector").checked = s.vector;
+  for (const f of CONFIG.flags) {
+    const el = $("#f_" + f.name);
+    if (!el) continue;
+    const v = s[f.name] === undefined ? f.default : s[f.name];
+    if (f.kind === "bool") el.checked = !!v;
+    else el.value = v === null ? "" : v;
+  }
   hint();
 }
 
@@ -191,20 +213,43 @@ function settingsFor(name) {
   return Object.assign({}, DEFAULTS, state.saved[name] || {});
 }
 
+function remember() {
+  if (!state.pick) return;
+  state.saved[state.pick] = readBar();
+  try { localStorage.setItem("tsp-settings", JSON.stringify(state.saved)); } catch (e) { /* riêng tư */ }
+}
+
 function hint() {
   // Ở cỡ 100% thiết kế đã lấp kín khung, nên neo vào góc nào cũng gần như nhau: không còn
   // chỗ trống để dịch. Đây là chỗ dễ tưởng là app hỏng nhất.
   const s = readBar();
-  $("#hint").textContent = (s.place !== "center" && s.scale >= 95)
+  $("#hint").textContent = (s.place && s.place !== "center" && s.scale >= 95)
     ? `Cỡ đang ${s.scale}% nên hình lấp gần kín khung, đặt ở "${s.place}" sẽ nhìn gần như căn giữa. `
       + `Giảm cỡ xuống thì mới thấy hình dịch vào góc, ví dụ 26% cho một bản in nhỏ.`
     : "";
 }
 
-function remember() {
-  if (!state.pick) return;
-  state.saved[state.pick] = readBar();
-  try { localStorage.setItem("tsp-settings", JSON.stringify(state.saved)); } catch (e) { /* riêng tư */ }
+function tagFor(name) {
+  const s = state.saved[name];
+  if (!s) return "";
+  return CONFIG.flags
+    .filter(f => s[f.name] !== undefined && s[f.name] !== null && s[f.name] !== f.default)
+    .map(f => f.kind === "bool" ? f.label : `${f.label} ${s[f.name]}`)
+    .join(" · ");
+}
+
+async function loadConfig() {
+  CONFIG = await api("/api/config");
+  for (const f of CONFIG.flags) DEFAULTS[f.name] = f.default;
+  $("#flags-main").innerHTML = CONFIG.flags.filter(f => f.group === "chính").map(control).join("");
+  $("#flags-adv").innerHTML = CONFIG.flags.filter(f => f.group !== "chính").map(control).join("");
+  for (const f of CONFIG.flags) {
+    const el = $("#f_" + f.name);
+    if (el) el.oninput = el.onchange = () => {
+      remember(); hint(); loadList();
+      if (state.pick) $("#msg").textContent = "Cờ đã đổi cho ảnh này, bấm Chạy để áp dụng.";
+    };
+  }
 }
 
 async function api(path, opts) {
@@ -227,11 +272,7 @@ async function loadList() {
   for (const im of state.images) {
     const el = document.createElement("div");
     el.className = "card" + (state.pick === im.name ? " on" : "");
-    const s = state.saved[im.name];
-    const tag = s ? [s.fill_holes ? "thân hình đặc" : "", s.vector ? "vector" : "",
-                     s.ink && s.ink !== "none" ? "mực " + s.ink : "",
-                     (s.place !== "center" || s.scale !== 100) ? `${s.place} ${s.scale}%` : ""]
-                     .filter(Boolean).join(" · ") : "";
+    const tag = tagFor(im.name);
     el.innerHTML = `<img loading="lazy" src="/src/${encodeURIComponent(im.name)}" alt="">
       <div><div class="nm">${im.name}</div>
       <div class="st">${im.waiting ? "đang chờ" : "đã xử lý"}${im.done ? " · <b>có file in</b>" : ""}${tag ? "<br>" + tag : ""}</div></div>`;
@@ -326,13 +367,27 @@ $("#run").onclick = () => run(state.pick ? [state.pick] : []).catch(e => $("#msg
 $("#runall").onclick = () => run(state.images.filter(i => i.waiting).map(i => i.name))
   .catch(e => $("#msg").textContent = e.message);
 $("#bgpick").onchange = paintBg;
-for (const f of FLAGS) $("#" + f).oninput = $("#" + f).onchange = () => {
-  remember();
-  hint();
-  loadList();
-  if (state.pick) $("#msg").textContent = "Cờ đã đổi cho ảnh này, bấm Chạy để áp dụng.";
+$("#auditbtn").onclick = async () => {
+  const btn = $("#auditbtn");
+  if ($("#audit").innerHTML) { $("#audit").innerHTML = ""; return; }   // bấm lần nữa để đóng bảng
+  btn.disabled = true;
+  btn.textContent = "đang chấm…";
+  try {
+    const rows = await api("/api/audit");
+    const avg = k => (rows.reduce((s, r) => s + (r[k] || 0), 0) / (rows.length || 1)).toFixed(2);
+    $("#audit").innerHTML = rows.length ? `<table>
+      <tr><th>đặc %</th><th>thừa %</th><th>sai số</th><th>file</th></tr>
+      ${rows.map(r => `<tr class="${r.why.length ? "warn" : ""}">
+        <td>${r.dac}</td><td>${r.thua}</td><td>${r.sai_so ?? "—"}</td>
+        <td>${esc(r.name)}${r.why.length ? `<div class="why">${r.why.map(esc).join("<br>")}</div>` : ""}</td>
+      </tr>`).join("")}
+      <tr><td>${avg("dac")}</td><td>${avg("thua")}</td><td>${avg("sai_so")}</td>
+          <td>trung bình của ${rows.length} file</td></tr></table>`
+      : '<div class="empty">Chưa có file in nào để chấm.</div>';
+  } catch (e) { $("#msg").textContent = e.message; }
+  btn.disabled = false;
+  btn.textContent = "Chấm cả lô";
 };
-
 // Kéo thả ảnh vào bất cứ đâu trên trang: file được ghi thẳng vào input/ rồi hiện trong danh sách.
 let dragDepth = 0;
 addEventListener("dragenter", e => { e.preventDefault(); if (++dragDepth === 1) document.body.classList.add("drop"); });
@@ -357,7 +412,10 @@ addEventListener("drop", async e => {
   await select(added[0]);
 });
 
-loadList().then(() => { if (state.images.length) select(state.images[0].name); });
+loadConfig()
+  .then(loadList)
+  .then(() => { if (state.images.length) select(state.images[0].name); })
+  .catch(e => { $("#msg").textContent = e.message; });
 poll();
 </script>
 </body>
