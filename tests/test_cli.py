@@ -334,3 +334,27 @@ def test_print_verdict_is_the_single_place_that_decides():
     assert v(dict(good, sai_so=9.0))["muc"] == "hong"
     assert v({"dac": 0.0, "phu_thap": 0.0, "thua": 0.0, "sai_so": 0.0})["muc"] == "hong"
     assert v(dict(good, phu_thap=15.7), dtf_warn=100)["muc"] == "dat"   # ngưỡng đổi được
+
+
+@pytest.fixture
+def dirs(tmp_path, monkeypatch):
+    """input/output/work/review riêng cho một test, không đụng ảnh thật; bỏ qua tool ngoài."""
+    for name, attr in (("input", "INPUT_DIR"), ("output", "OUTPUT_DIR"),
+                       ("work", "WORK_DIR"), ("review", "REVIEW_DIR")):
+        d = tmp_path / name
+        d.mkdir()
+        monkeypatch.setattr(pipeline, attr, d)
+    monkeypatch.setattr(pipeline, "check_tools", lambda: None)
+    monkeypatch.setattr(pipeline, "upscale", lambda img, scale=4, model="": img)
+    return tmp_path
+
+
+def test_audit_survives_an_empty_print_file(dirs, capsys):
+    """Một file in không có pixel mực nào phải hiện là 'file rỗng', không được làm sập cả bảng."""
+    src = dirs / "input" / "hinh.png"
+    _poster_on_black(src)
+    Image.new("RGBA", (40, 40), (0, 0, 0, 0)).save(dirs / "output" / "hinh_240x240_center.png")
+    assert pipeline.main(["--audit"]) == 0
+    out = capsys.readouterr().out
+    assert "hinh_240x240_center.png" in out
+    assert "file rỗng" in out and "Không dùng được" in out

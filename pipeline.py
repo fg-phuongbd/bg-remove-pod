@@ -961,7 +961,7 @@ def measure_print(out: Path, src: Path) -> dict:
     alpha = o[:, :, 3]
     ink = alpha > 0
     if not ink.any():
-        return {"dac": 0.0, "thua": 0.0, "sai_so": None, "shirt": "#808080"}
+        return {"dac": 0.0, "phu_thap": 0.0, "thua": 0.0, "sai_so": None, "shirt": "#808080"}
     original = load_image(src).convert("RGB")
     bg = np.array(bg_color(original), dtype=np.float32)
     a = (alpha / 255.0)[:, :, None]
