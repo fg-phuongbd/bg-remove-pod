@@ -109,7 +109,7 @@ hiện ra để chọn bản muốn xem; không chọn thì là bản mới nh�
 |---|---|
 | Đủ điều kiện in | không thấy vấn đề nào, tải file về và gửi xưởng |
 | In được, nên xem lại | phủ thấp, nét mảnh hay đốm nhỏ vượt ngưỡng DTF, nhiều màu ngoài gamut, hoặc mực mỏng bất thường |
-| Không dùng được | file rỗng, mực in đè lên áo cùng màu quá 20%, hoặc sai số khi in quá 5 |
+| Không dùng được | file rỗng, mực in đè lên áo cùng màu quá 20% mà không bật thân hình đặc, hoặc sai số khi in quá 5 |
 
 Luật quyết định nằm ở `print_verdict` trong `pipeline.py`, dùng chung với `--audit`, nên dòng lệnh và
 trang không bao giờ nói khác nhau.
@@ -119,7 +119,7 @@ trang không bao giờ nói khác nhau.
 | Số | Nghĩa | Đọc thế nào |
 |---|---|---|
 | mực đặc | phần trăm pixel đục hoàn toàn | So trong cùng loại thiết kế. Logo phẳng dưới 85% là đáng ngờ; poster halftone 42% vẫn đúng. |
-| mực trùng màu áo | mực đục nhưng cùng màu áo, tức chỗ máy phủ lót trắng rồi in đè lên vải | Dưới 5% thì bỏ qua. Trên 20% gần như chắc là bật `thân hình đặc` nhầm cho poster. |
+| mực trùng màu áo | mực đục nhưng cùng màu áo, tức chỗ máy phủ lót trắng rồi in đè lên vải | Có bật `thân hình đặc` thì đây là thân người tô đặc, chỉ ghi nhận. Không bật mà trên 20% là nhận diện nền sai hoặc poster. |
 | phủ thấp | mực nằm dưới 40% độ phủ | Cột quan trọng nhất với **in DTF**: vùng đó nhận ít bột keo nên dễ bong. Trên 5% thì in thử một chiếc, giặt vài lần rồi hãy chạy số lượng. In DTG có lót trắng thì không sao. |
 | nét mảnh | mực nằm trong nét mảnh hơn 0,5 mm | DTF bám kém ở nét mảnh. Trên 5% thì bật `nới nét DTF` (`--dtf-safe`) hoặc in thử. Poster halftone đo được 8 đến 16%, chữ và logo dưới 3%. |
 | đốm nhỏ | mực là đốm rời nhỏ hơn 1 mm² | Đốm dễ rơi khỏi bàn ép. Trên 1% thì như trên. Đốm mờ đã được dọn sẵn khi lưu; đây là đốm đậm. |
@@ -231,7 +231,7 @@ Nâng cao, thường không cần:
 | `--merge D` | 12 | Ngưỡng gộp hai màu gần nhau khi gom (CIELAB ΔE). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác bị gộp. |
 | `--dtf-warn P` | 5 | Cảnh báo khi quá P phần trăm diện tích mực nằm dưới 40% độ phủ, mức mà in DTF dễ bong. `100` = tắt. |
 | `--no-clean` | tắt | Không dọn mực vô hình trước khi lưu. Mặc định có dọn. |
-| `--fill-limit P` | 15 | Chốt chặn cho `--fill-holes`: nếu tô đặc làm tăng quá P phần trăm mực in đè lên áo cùng màu thì bỏ qua và cảnh báo. Đo trên chính bản sẽ in. `100` = tắt. |
+| `--fill-limit P` | 100 (tắt) | Chốt chặn tùy chọn cho `--fill-holes`: nếu tô đặc làm tăng quá P phần trăm mực in đè lên áo cùng màu thì bỏ qua và cảnh báo. Đo trên chính bản sẽ in. Đặt `20` khi không chắc ảnh có phải poster. |
 | `--fill-floor D` | 0 | Sàn cho `--fill-holes`: chỗ ảnh gốc cách màu nền dưới D không tô đặc, để áo làm màu đó. Ảnh đen trắng trên nền đen thử `32`. Xem mục **Thân hình quá tối so với nền**. |
 | `--fill-holes` | tắt | Không đục lỗ trong hình. Cắt hình: lấp chi tiết trắng bị model khoét (mắt, răng). Key `--shirt same`: thân hình nhân vật theo model cắt hình được giữ đặc (bóng áo tối trên nền đen, da trùng màu nền), ngoài thân hình vẫn key nên chữ ký, glow giữ nguyên. Không dùng nếu có lỗ chữ cố ý. |
 | `--keep-input` | tắt | Không chuyển ảnh gốc khỏi `input/`. |
@@ -273,44 +273,35 @@ hình thái học, vì tô đặc sợi đó sẽ biến khoảng nền kẹt b�
 Đổi lại: lần chạy đầu phải tải model cắt hình (~900 MB) và mỗi ảnh chậm thêm khoảng 20 giây. Không
 dùng cờ này nếu thiết kế có lỗ xuyên cố ý.
 
-**Chốt chặn tự động.** Với poster, model cắt hình coi cả tấm là một khối và lấp luôn nền giữa các
-chi tiết; mực đó in ra trùng màu áo, vừa phí vừa nổi thành mảng trên vải. Nên pipeline đo mức tăng
-của loại mực đó và bỏ qua việc tô đặc nếu vượt `--fill-limit`, mặc định 15%, kèm một dòng cảnh báo.
-Đo trên bộ ảnh thật: ba ảnh có người tăng 8 đến 11%, poster halftone nhẹ nhất tăng 12%, ba poster
-còn lại 27 đến 60%; 15 nằm giữa hai nhóm. Phép đo
-làm trên **chính bản sẽ in**, sau upscale: ở ảnh gốc, nhiễu hạt đẩy vùng tối lên trên ngưỡng, còn
-model upscale làm mịn nó về sát nền, và một tấm từng qua chốt ở 3% rồi ra file in 36%.
+**Người là một khối đặc, đúng như model cắt.** Đó là luật của cờ này: mọi thứ model nhận là người
+đều thành mực đặc, kể cả quần đen trên áo đen hay bóng sâu gần màu nền. Trên áo cùng màu, phần mực
+đó in ra trùng màu vải, tốn mực hơn và dày hơn một chút, đổi lại thân người là một miếng liền bám
+tốt, không có chỗ nào in mỏng. Kết luận trên trang ghi nhận phần mực đó bằng một dòng `·` thay vì
+đánh lỗi: đó là quyết định in, không phải khuyết điểm. Ảnh đen trắng tô đặc thêm tới 33% mực như
+vậy, ảnh người màu 8 đến 12%.
 
-### Thân hình quá tối so với nền: `--fill-floor`
+**Chốt chặn tùy chọn.** Với poster, model cắt hình coi cả tấm là một khối và lấp luôn nền giữa các
+chi tiết. Nếu không chắc ảnh có phải poster, đặt `--fill-limit 20` (`chặn tô đặc` trên trang):
+pipeline đo mức tăng mực trùng áo trên chính bản sẽ in và bỏ qua tô đặc nếu vượt, kèm cảnh báo hiện
+trên trang. Mặc định tắt, vì không có phép đo nào phân biệt được ảnh người tối với poster, và bạn
+đã nói ảnh này có người khi bật cờ.
 
-Ảnh chụp đen trắng trên nền đen là trường hợp khó: quần, bóng dưới cánh tay và nếp áo tối chỉ cách
-nền vài mức, nhìn trên màn hình là đen. Tô đặc cả thân hình biến chúng thành một khối mực gần đen
-in lên vải đen, tốn mực, dày bóng như nhựa, và mép silhouette lộ thành đường ánh trên vải. Không tô
-thì mặt và cánh tay in mỏng.
+### Để áo làm màu đen trong thân hình: `--fill-floor`
 
-`--fill-floor D` là điểm giữa: chỗ ảnh gốc cách màu nền dưới D không tô đặc mà để áo làm màu đó,
-chỗ sáng hơn nền rõ vẫn tô. Mặc định 0: tô cả thân hình, tóc đen và bóng sâu vẫn là mực đặc để bám
-tốt trên ảnh màu. Với ảnh đen trắng, chốt chặn sẽ bỏ qua tô đặc và cảnh báo hiện ngay trên trang;
-khi đó đặt `sàn tô đặc` = 32 rồi chạy lại, file mới nằm cạnh file cũ để so.
-
-Không có sàn tự động, vì thử trên poster và ảnh người thật thì không tín hiệu nào phân biệt được hai
-nhóm sau khi tô có sàn: tô có sàn không bao giờ tạo mực trùng áo, nên chốt chặn không còn gì để đo,
-và một poster bật nhầm cờ sẽ được tô quầng sáng thành mảng đặc mà không ai báo. Giữ bước bấm tay
-để giữ lớp bảo vệ đó.
-
-Đo trên bốn ảnh có người thật, nền đen, cùng một ngày. `mờ` là phần trăm pixel mực bán trong suốt,
-tức chỗ in mỏng; `trùng áo` là mực đục cùng màu vải.
+Nếu với một tấm nào đó bạn muốn ngược lại, tức quần và bóng sâu gần màu nền để cho áo làm màu đó
+thay vì in mực trùng màu, đặt `--fill-floor 32` (`sàn tô đặc`): chỗ ảnh gốc cách màu nền dưới 32
+không tô, chỗ sáng hơn vẫn tô đặc. Mặc định 0 = tô hết. Đo trên bốn ảnh có người thật:
 
 | Ảnh | không cờ: mờ | tô đặc: mờ / trùng áo | sàn 32: mờ / trùng áo |
 |---|---|---|---|
-| ảnh đen trắng (Bonix) | 18,4% | chốt chặn bỏ qua (thêm 33%) | 9,1% / 0,1% |
-| áo trắng, tóc đen (Romo) | 31,6% | 0,7% / 9,7% | 3,1% / 0% |
-| áo xanh, mũ trắng (Bills) | 32,0% | 0,6% / 11,3% | 5,6% / 0% |
+| ảnh đen trắng (Bonix) | 18,4% | 1,1% / 36% | 5,4% / 0,1% |
+| áo trắng, tóc đen (Romo) | 31,6% | 1,1% / 8,0% | 2,9% / 0% |
+| áo xanh, mũ trắng (Bills) | 32,0% | 0,5% / 12,4% | 5,3% / 0% |
 | nét cọ và vệt bắn (Allen) | 32,1% | 20,0% / 3,8% | 22,6% / 0% |
 
-Sàn 32 đưa mực trùng áo về 0 trên cả bốn tấm và vẫn tô đặc mặt, da, áo; cái giá là tóc đen và bóng
-sâu trở về alpha của bước key, nên `mờ` cao hơn bản tô đặc vài phần trăm. Trên áo đen, mắt không
-thấy khác; trên máy in, bản có sàn không có khối mực đen trên vải đen.
+`mờ` là mực bán trong suốt, tức chỗ in mỏng; `trùng áo` là mực đục cùng màu vải. Sàn 32 đưa mực
+trùng áo về 0 nhưng tóc đen và bóng sâu trở về alpha key, in mỏng hơn. Mặc định giữ tô hết.
+
 
 ## Hai kiểu key, pipeline tự chọn
 

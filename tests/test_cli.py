@@ -155,7 +155,7 @@ def test_fill_holes_is_skipped_when_it_would_print_over_the_shirt(tmp_path, monk
     src = tmp_path / "input" / "poster.png"
     _poster_on_black(src)
 
-    assert pipeline.main(["--size", "240x240", "--keep-input", "--fill-holes",
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--fill-holes", "--fill-limit", "20",
                           "--bg", "black", str(src)]) == 0
     log = capsys.readouterr().out
     assert "BỎ QUA --fill-holes" in log
@@ -327,9 +327,12 @@ def test_print_verdict_is_the_single_place_that_decides():
     soft = v(dict(good, phu_thap=15.7))
     assert soft["muc"] == "xem" and "DTF" in soft["why"][0]
 
-    # mực in đè lên áo cùng màu: bật --fill-holes nhầm cho poster
+    # mực in đè lên áo cùng màu mà không ai xin tô đặc: có gì đó sai
     hard = v(dict(good, thua=60.0))
     assert hard["muc"] == "hong" and "fill-holes" in hard["why"][0]
+    # cùng con số nhưng file được cố ý tô đặc thân hình: đó là ý người dùng, chỉ ghi nhận
+    meant = v(dict(good, thua=60.0, fill=True))
+    assert meant["muc"] == "dat" and meant["why"] == [] and meant["info"]
 
     assert v(dict(good, sai_so=9.0))["muc"] == "hong"
     assert v({"dac": 0.0, "phu_thap": 0.0, "thua": 0.0, "sai_so": 0.0})["muc"] == "hong"
@@ -541,7 +544,8 @@ def test_fill_that_is_skipped_does_not_tag_the_file(dirs, monkeypatch, capsys):
     monkeypatch.setattr(pipeline, "remove_bg", lambda img: Image.new("RGBA", img.size, (255, 255, 255, 255)))
     src = dirs / "input" / "poster.png"
     _poster_on_black(src)
-    assert pipeline.main(["--size", "240x240", "--keep-input", "--fill-holes", "--bg", "black", str(src)]) == 0
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--fill-holes", "--fill-limit", "20",
+                          "--bg", "black", str(src)]) == 0
     assert "BỎ QUA --fill-holes" in capsys.readouterr().out
     assert (dirs / "output" / "poster_240x240_center.png").exists()
     assert not (dirs / "output" / "poster_240x240_center_fill.png").exists()
@@ -550,7 +554,7 @@ def test_fill_that_is_skipped_does_not_tag_the_file(dirs, monkeypatch, capsys):
 def test_verdict_explains_redundant_ink_without_blaming_a_poster():
     v = pipeline.print_verdict({"dac": 97.0, "phu_thap": 0.5, "thua": 36.0, "sai_so": 1.0, "shirt": "#141416"})
     assert v["muc"] == "hong"
-    assert "thân hình quá tối" in v["why"][0] and "poster" in v["why"][0]
+    assert "không bật thân hình đặc" in v["why"][0] and "poster" in v["why"][0]
 
 
 def test_fill_guard_measures_the_print_resolution_image(dirs, monkeypatch, capsys):
@@ -571,7 +575,8 @@ def test_fill_guard_measures_the_print_resolution_image(dirs, monkeypatch, capsy
         return Image.fromarray(a, "RGB").convert(img.mode)
     monkeypatch.setattr(pipeline, "upscale", smoothing_upscale)
 
-    assert pipeline.main(["--size", "240x240", "--keep-input", "--fill-holes", "--bg", "black", str(src)]) == 0
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--fill-holes", "--fill-limit", "20",
+                          "--bg", "black", str(src)]) == 0
     log = capsys.readouterr().out
     assert "BỎ QUA --fill-holes" in log
     assert (dirs / "output" / "toi_240x240_center.png").exists()
@@ -614,7 +619,8 @@ def test_warnings_are_recorded_in_the_print_file(dirs, monkeypatch, capsys):
     monkeypatch.setattr(pipeline, "remove_bg", lambda img: Image.new("RGBA", img.size, (255, 255, 255, 255)))
     src = dirs / "input" / "poster.png"
     _poster_on_black(src)
-    assert pipeline.main(["--size", "1200x1200", "--keep-input", "--fill-holes", "--bg", "black", str(src)]) == 0
+    assert pipeline.main(["--size", "1200x1200", "--keep-input", "--fill-holes", "--fill-limit", "20",
+                          "--bg", "black", str(src)]) == 0
     log = capsys.readouterr().out
     notes = pipeline.read_meta(dirs / "output" / "poster_1200x1200_center.png")["notes"]
     assert any(n.startswith("BỎ QUA --fill-holes") for n in notes)
@@ -630,8 +636,32 @@ def test_warnings_are_recorded_in_the_print_file(dirs, monkeypatch, capsys):
     assert pipeline.read_meta(dirs / "output" / "sach_240x240_center.png")["notes"] == []
 
 
-def test_fill_limit_default_is_fifteen():
-    """Poster halftone 04_28_47 tô toàn thân chỉ thêm 12% mực trùng áo và lọt qua 20; ba ảnh người
-    thật thêm 8 đến 11%. 15 nằm giữa."""
-    assert pipeline.FILL_LIMIT == 15.0
-    assert pipeline.parse_args([]).fill_limit == 15.0
+def test_fill_limit_is_off_by_default():
+    """Người dùng chỉ bật thân hình đặc cho ảnh có người, và muốn người là một khối đặc đúng như
+    model cắt, kể cả quần đen trên áo đen. Chốt chặn không được cản điều đó; ai muốn thì tự bật
+    bằng --fill-limit 20."""
+    assert pipeline.FILL_LIMIT == 100.0
+    assert pipeline.parse_args([]).fill_limit == 100.0
+
+
+def test_fill_holes_covers_a_dark_figure_by_default(dirs, monkeypatch, capsys):
+    """Ảnh đen trắng, thân người gần màu nền: bật thân hình đặc thì phải tô hết, không hỏi lại."""
+    from PIL import ImageDraw
+    im = Image.new("RGB", (240, 240), (19, 19, 19))
+    d = ImageDraw.Draw(im)
+    d.rectangle((60, 40, 180, 120), fill=(230, 230, 230))       # áo trắng
+    d.rectangle((60, 120, 180, 220), fill=(27, 27, 27))         # quần gần đen
+    src = dirs / "input" / "toi.png"
+    im.save(src)
+    sil = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    ImageDraw.Draw(sil).rectangle((58, 38, 182, 222), fill=(255, 255, 255, 255))
+    monkeypatch.setattr(pipeline, "remove_bg", lambda img: sil)
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--fill-holes", str(src)]) == 0
+    assert "BỎ QUA" not in capsys.readouterr().out
+    out = dirs / "output" / "toi_240x240_center_fill.png"
+    assert np.asarray(Image.open(out))[170, 120, 3] == 255      # quần: mực đặc, đúng ý người dùng
+    rep = pipeline.measure_print(out, src)
+    assert rep["thua"] > 20 and rep["fill"] is True
+    v = pipeline.print_verdict(rep)
+    assert v["muc"] == "dat", v                                  # cố ý tô đặc thì không phải lỗi
+    assert any("tô đặc" in w for w in v.get("info", [])), v      # nhưng vẫn nói cho biết

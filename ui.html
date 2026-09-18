@@ -118,6 +118,7 @@
   a.dl[hidden] { display: none; }
   #variantbox[hidden] { display: none; }
   #nums .cmd { flex-basis: 100%; }
+  .verdict .why.info { opacity: .8; }
   /* Cảnh báo của lần chạy, cùng câu chữ với terminal: chốt chặn bỏ qua tô đặc, phủ thấp DTF, ảnh gốc nhỏ. */
   #nums .note { flex-basis: 100%; color: #ffd479; font-size: 12px; padding: 6px 10px; border-left: 3px solid #ffd479; background: rgba(255,212,121,.08); }
   #nums .cmd b { font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; user-select: all; }
@@ -348,6 +349,7 @@ function showNums(r) {
   const v = r.muc ? `<div class="verdict ${r.muc}">
       <div class="lbl">${esc(r.nhan)}</div>
       ${r.why && r.why.length ? `<div class="why">${r.why.map(w => "• " + esc(w)).join("<br>")}</div>` : ""}
+      ${r.info && r.info.length ? `<div class="why info">${r.info.map(w => "· " + esc(w)).join("<br>")}</div>` : ""}
     </div>` : "";
   // Cột "—" là không đo được, không phải 0: file cắt hình in lên áo khác màu nền mà ta không
   // biết là màu gì, còn file một màu mực thì cố ý khác ảnh gốc.

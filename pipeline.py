@@ -38,8 +38,11 @@ DTF_COVERAGE = 102  # dưới 40% độ phủ: vùng nhận ít bột keo khi in
 DTF_WARN = 5.0  # cảnh báo khi vùng phủ thấp vượt quá ngần này phần trăm diện tích mực
 THIN_WARN = 5.0  # cảnh báo khi quá ngần này phần trăm mực nằm trong nét mảnh hơn MIN_FEATURE_MM
 SPECK_WARN = 1.0  # cảnh báo khi quá ngần này phần trăm mực là đốm rời nhỏ hơn SPECK_MM2
-FILL_LIMIT = 15.0  # --fill-holes bị bỏ qua nếu nó thêm quá ngần này phần trăm mực trùng màu áo:
-# ba ảnh người thật thêm 8-11%, poster halftone nhẹ nhất thêm 12%, ba poster còn lại 27-60%
+# --fill-holes bị bỏ qua nếu nó thêm quá ngần này phần trăm mực trùng màu áo. Mặc định 100 = tắt:
+# người dùng chỉ bật cờ cho ảnh có người và muốn người là một khối đặc đúng như model cắt, kể cả
+# quần đen trên áo đen (ảnh đen trắng thêm tới 33%). Ai lo bật nhầm cho poster thì đặt 20: ba ảnh
+# người màu thêm 8-12%, ba poster thêm 27-60%.
+FILL_LIMIT = 100.0
 SOLID_SHARE = 0.5  # share of same-colored neighbours that makes a pixel part of a flat area
 KEY_FLOOR = 32.0  # default for --floor: colors closer than this to the background are shirt, not ink
 MERGE_DELTA_E = 12.0  # default for --merge: palette colors closer than this (CIELAB) are always merged
@@ -1213,7 +1216,7 @@ def measure_print(out: Path, src: Path) -> dict:
     ink = alpha > 0
     if not ink.any():
         return {"dac": 0.0, "phu_thap": 0.0, "manh": 0.0, "dom": 0.0, "gamut": None, "de_max": None,
-                "thua": 0.0, "sai_so": None, "shirt": "#808080"}
+                "thua": 0.0, "sai_so": None, "shirt": "#808080", "fill": False}
     rep = {
         "dac": round(100 * float((alpha[ink] > 250).mean()), 1),
         "phu_thap": round(100 * float((alpha[ink] < DTF_COVERAGE).mean()), 1),
@@ -1221,6 +1224,7 @@ def measure_print(out: Path, src: Path) -> dict:
         **(gamut_clip(Image.fromarray(o.astype(np.uint8), "RGBA")) or {"gamut": None, "de_max": None}),
     }
     meta = read_meta(out) or {}
+    rep["fill"] = bool(meta.get("flags", {}).get("fill_holes")) and "thân hình đặc" in meta.get("how", "")
     if meta.get("mode") in ("ai", "none"):
         return dict(rep, thua=None, sai_so=None, shirt=None)
     original = load_image(src).convert("RGB")
@@ -1399,14 +1403,19 @@ def print_verdict(report: dict, dtf_warn: float = DTF_WARN) -> dict:
 
     Ba mức: `hong` là file không dùng được, `xem` là in được nhưng có chỗ đáng ngờ nên xem lại,
     `dat` là không thấy vấn đề nào. Ngưỡng đều lấy từ số đo thật trên một bộ 26 thiết kế."""
-    hard, soft = [], []
+    hard, soft, info = [], [], []
     thua = report.get("thua")  # None = không đo được (áo khác màu nền), không phải 0
     if report["dac"] == 0 and not thua:
         hard.append("file rỗng, không có pixel mực nào")
     if thua is not None and thua > 20:
-        hard.append(f"{report['thua']:.0f}% mực in đè lên áo cùng màu: thân hình quá tối so với nền "
-                    f"nên tô đặc thành khối mực trùng màu vải, hoặc bật --fill-holes nhầm cho poster. "
-                    f"Chạy lại không có cờ đó và so hai bản")
+        if report.get("fill"):
+            # Người dùng cố ý tô đặc thân hình: đó là quyết định in, không phải lỗi. Chỉ nói cho biết
+            # phần mực đó nằm trên vải cùng màu, để họ cân nhắc chi phí mực và độ dày trên áo.
+            info.append(f"{report['thua']:.0f}% mực là thân hình tô đặc trùng màu áo, in thành một khối "
+                        f"liền, tốn mực hơn nhưng bám tốt. Đó là do bật thân hình đặc, đúng ý")
+        else:
+            hard.append(f"{report['thua']:.0f}% mực in đè lên áo cùng màu mà không bật thân hình đặc: "
+                        f"nhận diện nền sai hoặc bật --fill-holes nhầm cho poster. Mở ảnh so sánh xem")
     if (report.get("sai_so") or 0) > 5:
         hard.append(f"sai số khi in {report['sai_so']:.1f} mức trên 255, mở ảnh so sánh xem bằng mắt")
     if report.get("phu_thap", 0) > dtf_warn:
@@ -1427,7 +1436,7 @@ def print_verdict(report: dict, dtf_warn: float = DTF_WARN) -> dict:
     return {"muc": muc,
             "nhan": {"hong": "Không dùng được", "xem": "In được, nên xem lại",
                      "dat": "Đủ điều kiện in"}[muc],
-            "why": hard + soft}
+            "why": hard + soft, "info": info}
 
 
 def audit_rows(sources: list[Path]) -> list[dict]:
@@ -1467,10 +1476,12 @@ def audit(sources: list[Path]) -> int:
     ok = sum(1 for r in rows if r["muc"] == "dat")
     print(f"đủ điều kiện in: {ok}/{len(rows)} file")
     for r in rows:
-        if r["why"]:
+        if r["why"] or r.get("info"):
             print(f"  {r['nhan']}: {r['name'][:56]}")
             for w in r["why"]:
                 print(f"      - {w}")
+            for w in r.get("info", []):
+                print(f"      · {w}")
     return 0
 
 
