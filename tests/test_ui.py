@@ -321,3 +321,15 @@ def test_page_offers_the_presets_and_applies_them(workspace):
     _design(src)
     pipeline.process_one(src, ui.make_args({"size": "300x300", "preset": "chest-left"}))
     assert (workspace / "output" / "a_300x300_top-right_26pc.png").exists()
+
+
+def test_server_serves_a_soft_proof_of_the_print_file(server, workspace):
+    if pipeline.CMYK_PROFILE is None:
+        pytest.skip("không có hồ sơ CMYK trên máy này")
+    src = workspace / "input" / "a.png"
+    _design(src)
+    pipeline.process_one(src, ui.make_args({"size": "300x300"}))
+    status, body = get(server, "/proof/a.png")
+    assert status == 200 and Image.open(io.BytesIO(body)).mode == "RGBA"
+    rep = json.loads(get(server, "/api/report/a.png")[1])
+    assert "gamut" in rep

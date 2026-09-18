@@ -414,9 +414,17 @@ def render_svg(svg_path: Path, box: tuple[int, int]) -> Image.Image:
 
 
 # ---------------------------------------------------------------- raster
+UPSCALE_MODEL = {"flat": "realesrgan-x4plus-anime", "detail": "realesrgan-x4plus", "grain": "lanczos"}
+
+
 def upscale(img: Image.Image, scale: int = 4, model: str = "realesrgan-x4plus-anime") -> Image.Image:
-    """Real-ESRGAN if the binary exists (anime model for flat art, x4plus for painterly), else Lanczos."""
+    """Real-ESRGAN if the binary exists (anime model for flat art, x4plus for painterly), else Lanczos.
+
+    `model="lanczos"` asks for plain resampling on purpose: halftone dots and grain come out of
+    either ESRGAN model as painted fur or cracked blobs, while Lanczos keeps the dots as dots."""
     img = img.convert("RGBA") if img.mode == "RGBA" else img.convert("RGB")
+    if model == "lanczos":
+        return img.resize((img.width * scale, img.height * scale), Image.Resampling.LANCZOS)
     if REALESRGAN_BIN.exists():
         with tempfile.TemporaryDirectory() as td:
             src, dst = Path(td) / "in.png", Path(td) / "out.png"
@@ -783,9 +791,32 @@ def one_ink(img: Image.Image, ink: tuple[int, int, int], shirt: tuple[int, int, 
     return Image.fromarray(out.round().astype(np.uint8), "RGBA")
 
 
+def is_grainy(cut: Image.Image, per_1k: float = 3.0, speck_px: int = 40) -> bool:
+    """Halftone, splatter, grain: the ink is made of many tiny separate pieces.
+
+    Counted on a thumbnail no larger than 1024 px: pieces under `speck_px` per 1000 ink pixels.
+    Measured on 26 real designs, the four halftone posters and two splatter pieces sit at 3.4 to
+    21, photographs and flat art at or below 0.9. Those six all came out of Real-ESRGAN as fur
+    or blobs, so this decides whether the upscale is allowed to invent detail at all."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    im = cut.convert("RGBA")
+    im.thumbnail((1024, 1024))
+    ink = np.asarray(im)[:, :, 3] > 128
+    if not ink.any():
+        return False
+    labels, n = ndimage.label(ink)
+    if not n:
+        return False
+    sizes = np.asarray(ndimage.sum(ink, labels, range(1, n + 1)))
+    return float((sizes < speck_px).sum()) / float(ink.sum()) * 1000.0 >= per_1k
+
+
 def detect_style(cut: Image.Image) -> str:
-    """'flat' when most *design* pixels (alpha >= 128) sit in locally uniform color, else 'detail'.
-    Used to pick the upscale model (anime for flat art, x4plus for painterly)."""
+    """'grain' for halftone and splatter, 'flat' when most *design* pixels (alpha >= 128) sit in
+    locally uniform color, else 'detail'. Picks the upscale: Lanczos, anime model, x4plus."""
+    if is_grainy(cut):
+        return "grain"
     im = cut.convert("RGBA")
     im.thumbnail((512, 512))
     rgba = np.asarray(im)
@@ -1122,7 +1153,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
 
     style = detect_style(cut) if args.style == "auto" else args.style
     colors = args.colors if args.colors is not None else (12 if args.vector else 0)
-    model = "realesrgan-x4plus-anime" if style == "flat" else "realesrgan-x4plus"
+    model = UPSCALE_MODEL[style]
     how = {"none": "đã trong suốt", "ai": "cắt hình" + (" + tinh chỉnh viền" if refine else ""),
            "black": "key nền đen", "white": "key nền trắng",
            "color": "key khoảng cách màu" if kind in ("black", "white") else "key màu nền"}[bg]
@@ -1294,8 +1325,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     daily.add_argument("files", nargs="*", help="chỉ xử lý các file này thay cho cả input/")
     p = p.add_argument_group("nâng cao (thường không cần)")
     p.add_argument("--bg", choices=["auto", "black", "white", "color", "ai", "none"], default="auto", help=argparse.SUPPRESS)
-    p.add_argument("--style", choices=["auto", "flat", "detail"], default="auto",
-                   help="chọn model upscale: flat = tranh phẳng, detail = tranh có gradient/texture. auto = tự nhận diện")
+    p.add_argument("--style", choices=["auto", "flat", "detail", "grain"], default="auto",
+                   help="chọn cách upscale: flat = tranh phẳng (model anime), detail = tranh có gradient/texture "
+                        "(model x4plus), grain = halftone, chấm bi, vệt bắn (Lanczos, không cho model bịa chi tiết). "
+                        "auto = tự nhận diện")
     p.add_argument("--colors", type=int, default=None,
                    help="gom về tối đa N màu. Mặc định: 12 khi --vector, không gom khi raster. 0 = không gom")
     p.add_argument("--merge", type=float, default=MERGE_DELTA_E,

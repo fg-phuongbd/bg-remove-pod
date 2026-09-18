@@ -458,3 +458,49 @@ def test_warns_when_the_source_is_too_small_for_the_print_size(dirs, capsys):
 
     assert pipeline.main(["--size", "240x240", "--keep-input", str(src)]) == 0
     assert "CẢNH BÁO ảnh gốc nhỏ" not in capsys.readouterr().out
+
+
+def test_grainy_art_is_upscaled_with_lanczos(dirs, monkeypatch, capsys):
+    """Halftone qua Real-ESRGAN thành vệt lông xù; ảnh hạt phải đi đường Lanczos."""
+    import subprocess
+    calls = []
+    monkeypatch.setattr(pipeline, "upscale", lambda img, scale=4, model="": (calls.append(model), img)[1])
+    from PIL import ImageDraw
+    im = Image.new("RGB", (240, 240), (0, 0, 0))
+    d = ImageDraw.Draw(im)
+    for y in range(30, 210, 6):                     # chừa lề: viền ảnh phải là nền để nhận diện được
+        for x in range(30, 210, 6):
+            d.ellipse((x - 2, y - 2, x + 2, y + 2), fill=(240, 240, 240))
+    src = dirs / "input" / "cham.png"
+    im.save(src)
+    assert pipeline.main(["--size", "240x240", "--keep-input", str(src)]) == 0
+    assert "kiểu: grain" in capsys.readouterr().out
+    assert calls == ["lanczos"]
+    assert pipeline.parse_args(["--style", "grain"]).style == "grain"
+
+
+def test_verdict_and_audit_carry_fine_ink(dirs, capsys):
+    from tests.test_export import _strokes
+    src = dirs / "input" / "net.png"
+    _poster_on_black(src)
+    out = dirs / "output" / "net_300x300_center.png"
+    pipeline.save_print_png(_strokes(), out, clean=False)
+    rep = pipeline.measure_print(out, src)
+    assert rep["manh"] > 5 and rep["dom"] > 0
+    v = pipeline.print_verdict(rep)
+    assert v["muc"] == "xem" and any("mảnh" in w for w in v["why"])
+    assert pipeline.main(["--audit"]) == 0
+    assert "mảnh" in capsys.readouterr().out
+
+
+def test_dtf_safe_thickens_before_saving(dirs):
+    from PIL import ImageDraw
+    im = Image.new("RGB", (240, 240), (0, 0, 0))
+    ImageDraw.Draw(im).line((20, 120, 220, 120), fill=(240, 240, 240), width=1)   # nét 1 px
+    src = dirs / "input" / "line.png"
+    im.save(src)
+    assert pipeline.main(["--size", "240x240", "--keep-input", str(src)]) == 0
+    thin = pipeline.fine_ink(Image.open(dirs / "output" / "line_240x240_center.png"))["manh"]
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--dtf-safe", str(src)]) == 0
+    safe = pipeline.fine_ink(Image.open(dirs / "output" / "line_240x240_center_dtf-safe.png"))["manh"]
+    assert thin > 50 and safe < 5

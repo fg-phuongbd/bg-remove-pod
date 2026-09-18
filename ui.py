@@ -82,7 +82,7 @@ def page_config() -> dict:
         "place": list(pipeline.PLACES),
         "preset": ["none", *pipeline.PRESETS],
         "bg": ["auto", *pipeline.BG_KINDS, "ai"],
-        "style": ["auto", "flat", "detail"],
+        "style": ["auto", "flat", "detail", "grain"],
         "ink": ["none", "black", "white"],
     }
     return {"flags": [{"name": k, "group": g, "label": label, "hint": hint,

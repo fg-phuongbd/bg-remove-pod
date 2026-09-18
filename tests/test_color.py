@@ -109,3 +109,34 @@ def test_is_flat_art_separates_solid_areas_from_shading():
     rng = np.random.default_rng(11)
     shaded[lit] += rng.normal(0, 6, shaded[lit].shape)    # photographic grain
     assert pipeline.is_flat_art(Image.fromarray(shaded.round().clip(0, 255).astype(np.uint8))) is False
+
+
+def test_gamut_clip_flags_neon_but_not_neutral():
+    import pytest
+    from PIL import Image
+    import pipeline
+
+    if pipeline.CMYK_PROFILE is None:
+        pytest.skip("không có hồ sơ CMYK trên máy này")
+    neon = Image.new("RGBA", (20, 20), (255, 40, 130, 255))
+    grey = Image.new("RGBA", (20, 20), (128, 128, 128, 255))
+    half = Image.new("RGBA", (20, 20), (128, 128, 128, 255))
+    half.paste(neon, (0, 0, 20, 10))
+    assert pipeline.gamut_clip(neon)["gamut"] > 90 and pipeline.gamut_clip(neon)["de_max"] > 10
+    assert pipeline.gamut_clip(grey)["gamut"] < 5
+    assert 40 < pipeline.gamut_clip(half)["gamut"] < 60
+    assert pipeline.gamut_clip(Image.new("RGBA", (4, 4), (0, 0, 0, 0))) == {"gamut": 0.0, "de_max": 0.0}
+
+
+def test_soft_proof_keeps_alpha_and_dulls_neon():
+    import numpy as np
+    import pytest
+    from PIL import Image
+    import pipeline
+
+    if pipeline.CMYK_PROFILE is None:
+        pytest.skip("không có hồ sơ CMYK trên máy này")
+    im = Image.new("RGBA", (10, 10), (255, 40, 130, 120))
+    p = np.asarray(pipeline.soft_proof(im))
+    assert (p[:, :, 3] == 120).all()
+    assert tuple(p[0, 0, :3]) != (255, 40, 130)

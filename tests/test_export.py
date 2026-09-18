@@ -64,3 +64,37 @@ def test_read_meta_is_none_for_a_file_made_before_this(tmp_path):
     p = tmp_path / "cu.png"
     Image.new("RGBA", (4, 4)).save(p)
     assert pipeline.read_meta(p) is None
+
+
+def _strokes():
+    """Một khối 100 px, một nét 3 px (0,25 mm ở 300 DPI) và hai đốm 3 x 3 px."""
+    import numpy as np
+
+    a = np.zeros((300, 300, 4), np.uint8)
+    a[20:120, 20:120] = (200, 30, 30, 255)          # khối: in tốt
+    a[150:153, 20:280] = (30, 30, 200, 255)         # nét mảnh: DTF bong
+    a[200:203, 40:43] = (30, 200, 30, 255)          # đốm
+    a[200:203, 60:63] = (30, 200, 30, 255)
+    return Image.fromarray(a, "RGBA")
+
+
+def test_fine_ink_measures_thin_strokes_and_specks():
+    import pipeline
+
+    f = pipeline.fine_ink(_strokes())
+    total = 100 * 100 + 3 * 260 + 2 * 9
+    assert abs(f["manh"] - 100 * (3 * 260 + 18) / total) < 1.5   # nét và đốm đều mảnh hơn 0,5 mm
+    assert abs(f["dom"] - 100 * 18 / total) < 0.1                 # chỉ hai đốm là rời và nhỏ hơn 1 mm²
+    assert pipeline.fine_ink(Image.new("RGBA", (10, 10), (0, 0, 0, 0))) == {"manh": 0.0, "dom": 0.0}
+
+
+def test_min_feature_thickens_thin_ink_with_its_own_color():
+    import numpy as np
+    import pipeline
+
+    out = pipeline.min_feature(_strokes(), mm=0.5)
+    a = np.asarray(out)
+    assert pipeline.fine_ink(out)["manh"] < 1.0
+    assert a[148, 100, 3] == 255 and tuple(a[148, 100, :3]) == (30, 30, 200)   # nét nới ra, đúng màu nét
+    assert a[20:120, 20:120, 3].min() == 255 and tuple(a[60, 60, :3]) == (200, 30, 30)  # khối không đổi
+    assert a[10, 10, 3] == 0                                                   # nền vẫn trong suốt
