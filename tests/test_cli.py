@@ -378,3 +378,49 @@ def test_print_file_carries_its_flags_and_the_chosen_method(dirs):
     assert meta["bg"] == "black" and meta["mode"] == "black"
     assert meta["how"] == "key nền đen"
     assert meta["cmd"] == "./run.sh --size 240x240 --bg black"
+
+
+def _fake_cutout(img):
+    """Thay model cắt hình: pixel tối trên nền đen thành trong suốt, còn lại giữ đục."""
+    a = np.asarray(img.convert("RGBA")).copy()
+    a[:, :, 3] = np.where(a[:, :, :3].max(axis=2) > 60, 255, 0)
+    return Image.fromarray(a, "RGBA")
+
+
+def test_measure_does_not_grade_a_cutout_against_the_wrong_shirt(dirs, monkeypatch, capsys):
+    """--shirt other là in lên áo KHÁC màu nền, nên 'mực trùng màu áo' và 'sai số' so với màu nền
+    gốc là con số vô nghĩa, và có thể kết luận 'Không dùng được' nhầm. Không đo được thì nói không
+    đo được, đừng bịa số."""
+    monkeypatch.setattr(pipeline, "remove_bg", _fake_cutout)
+    src = dirs / "input" / "hinh.png"
+    _poster_on_black(src)
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--shirt", "other", str(src)]) == 0
+    out = dirs / "output" / "hinh_240x240_center.png"
+    rep = pipeline.measure_print(out, src)
+    assert rep["dac"] > 0 and rep["phu_thap"] >= 0
+    assert rep["thua"] is None and rep["sai_so"] is None
+    assert rep["shirt"] is None                     # áo khác màu nền: không biết là màu gì
+    assert pipeline.print_verdict(rep)["muc"] != "hong"
+
+    capsys.readouterr()
+    assert pipeline.main(["--audit"]) == 0
+    table = capsys.readouterr().out
+    assert "hinh_240x240_center.png" in table and "—" in table
+
+
+def test_measure_skips_fidelity_for_a_one_ink_file(dirs):
+    """Tách một màu cố ý khác ảnh gốc, nên 'sai số khi in' không có nghĩa; mực trùng màu áo thì vẫn đo."""
+    src = dirs / "input" / "toi.png"
+    _poster_on_black(src)
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--ink", "white", str(src)]) == 0
+    rep = pipeline.measure_print(dirs / "output" / "toi_240x240_center_ink-white.png", src)
+    assert rep["sai_so"] is None
+    assert rep["thua"] is not None and rep["thua"] < 5
+    assert rep["shirt"] == "#141416"
+
+
+def test_print_verdict_copes_with_unmeasured_columns():
+    v = pipeline.print_verdict({"dac": 90.0, "phu_thap": 1.0, "thua": None, "sai_so": None, "shirt": None})
+    assert v["muc"] == "dat"
+    v = pipeline.print_verdict({"dac": 0.0, "phu_thap": 0.0, "thua": None, "sai_so": None, "shirt": None})
+    assert v["muc"] == "hong" and "rỗng" in v["why"][0]

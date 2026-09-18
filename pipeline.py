@@ -991,12 +991,24 @@ def measure_print(out: Path, src: Path) -> dict:
     sau vài lần giặt; in DTG có lót trắng thì không sao.
     `thua`: phần trăm mực đục nhưng trùng màu áo, tức chỗ máy phủ lót trắng rồi in đè lên vải.
     `sai_so`: ghép file lên màu áo rồi so với ảnh gốc, theo mức trên 255.
+
+    Hai số sau chỉ có nghĩa khi áo là màu nền ảnh gốc, tức đường key. File cắt hình (`--shirt
+    other`) in lên áo khác màu mà ta không biết là màu gì, nên chúng là None chứ không phải một
+    con số so với nhầm áo. File tách một màu cố ý khác ảnh gốc, nên riêng `sai_so` là None.
+    Cách file được tạo đọc từ chính file; file làm trước khi có mục đó coi như đường key.
     """
     o = np.asarray(Image.open(out).convert("RGBA")).astype(np.float32)
     alpha = o[:, :, 3]
     ink = alpha > 0
     if not ink.any():
         return {"dac": 0.0, "phu_thap": 0.0, "thua": 0.0, "sai_so": None, "shirt": "#808080"}
+    rep = {
+        "dac": round(100 * float((alpha[ink] > 250).mean()), 1),
+        "phu_thap": round(100 * float((alpha[ink] < DTF_COVERAGE).mean()), 1),
+    }
+    meta = read_meta(out) or {}
+    if meta.get("mode") in ("ai", "none"):
+        return dict(rep, thua=None, sai_so=None, shirt=None)
     original = load_image(src).convert("RGB")
     bg = np.array(bg_color(original), dtype=np.float32)
     a = (alpha / 255.0)[:, :, None]
@@ -1004,13 +1016,11 @@ def measure_print(out: Path, src: Path) -> dict:
     wasted = (alpha > 200) & (np.linalg.norm(on_shirt - bg, axis=2) < 30)
     kind = detect_bg(original)
     shirt = {"black": (20, 20, 22), "white": (245, 245, 245)}.get(kind) or tuple(int(v) for v in bg)
-    return {
-        "dac": round(100 * float((alpha[ink] > 250).mean()), 1),
-        "phu_thap": round(100 * float((alpha[ink] < DTF_COVERAGE).mean()), 1),
-        "thua": round(100 * float(wasted.sum()) / float(ink.sum()), 2),
-        "sai_so": round(_key_fidelity(original, kind), 2),
-        "shirt": "#%02x%02x%02x" % shirt,
-    }
+    one_color = parse_ink(str(meta.get("flags", {}).get("ink", "none"))) is not None
+    return dict(rep,
+                thua=round(100 * float(wasted.sum()) / float(ink.sum()), 2),
+                sai_so=None if one_color else round(_key_fidelity(original, kind), 2),
+                shirt="#%02x%02x%02x" % shirt)
 
 
 def _key_fidelity(original: Image.Image, kind: str) -> float:
@@ -1138,9 +1148,10 @@ def print_verdict(report: dict, dtf_warn: float = DTF_WARN) -> dict:
     Ba mức: `hong` là file không dùng được, `xem` là in được nhưng có chỗ đáng ngờ nên xem lại,
     `dat` là không thấy vấn đề nào. Ngưỡng đều lấy từ số đo thật trên một bộ 26 thiết kế."""
     hard, soft = [], []
-    if report["dac"] == 0 and report["thua"] == 0:
+    thua = report.get("thua")  # None = không đo được (áo khác màu nền), không phải 0
+    if report["dac"] == 0 and not thua:
         hard.append("file rỗng, không có pixel mực nào")
-    if report["thua"] > 20:
+    if thua is not None and thua > 20:
         hard.append(f"{report['thua']:.0f}% mực in đè lên áo cùng màu, gần như chắc là bật "
                     f"--fill-holes nhầm cho poster")
     if (report.get("sai_so") or 0) > 5:
@@ -1176,17 +1187,21 @@ def audit(sources: list[Path]) -> int:
     if not rows:
         print(f"Chưa có file in nào trong {OUTPUT_DIR}")
         return 0
+    def num(v: float | None, width: int, digits: int) -> str:
+        return f"{v:{width}.{digits}f}" if v is not None else f"{'—':>{width}s}"
+
+    def mean(vals: list[float | None]) -> str:
+        known = [v for v in vals if v is not None]
+        return f"{sum(known) / len(known):.2f}" if known else "—"
+
     print(f"{'đặc%':>6s} {'phủ thấp%':>10s} {'thừa%':>7s} {'sai số':>7s}  file")
     for r in rows:
         mark = {"dat": "", "xem": "  <-- xem lại", "hong": "  <-- KHÔNG DÙNG ĐƯỢC"}[r["muc"]]
-        print(f"{r['dac']:6.1f} {r['phu_thap']:10.1f} {r['thua']:7.2f}"
-              f" {r['sai_so'] if r['sai_so'] is not None else 0:7.2f}"
+        print(f"{r['dac']:6.1f} {r['phu_thap']:10.1f} {num(r['thua'], 7, 2)} {num(r['sai_so'], 7, 2)}"
               f"  {r['name'][:46]}{mark}")
     d = [r["dac"] for r in rows]
-    t = [r["thua"] for r in rows]
-    f = [r["sai_so"] or 0.0 for r in rows]
-    print(f"\n{len(rows)} file | mực đặc tb {sum(d)/len(d):.1f}% | mực thừa tb {sum(t)/len(t):.2f}% | "
-          f"sai số tb {sum(f)/len(f):.2f}")
+    print(f"\n{len(rows)} file | mực đặc tb {sum(d)/len(d):.1f}% | mực thừa tb {mean([r['thua'] for r in rows])}% | "
+          f"sai số tb {mean([r['sai_so'] for r in rows])}  (— = không đo được, áo khác màu nền)")
     ok = sum(1 for r in rows if r["muc"] == "dat")
     print(f"đủ điều kiện in: {ok}/{len(rows)} file")
     for r in rows:
