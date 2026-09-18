@@ -606,3 +606,32 @@ def test_upscale_style_does_not_depend_on_fill_holes(dirs, monkeypatch, capsys):
     styles = {"không cờ": style_of([]), "tô đặc": style_of(["--fill-holes"]),
               "sàn 32": style_of(["--fill-holes", "--fill-floor", "32"])}
     assert len(set(styles.values())) == 1, f"kiểu đổi theo cờ: {styles}"
+
+
+def test_warnings_are_recorded_in_the_print_file(dirs, monkeypatch, capsys):
+    """Người dùng trang không thấy terminal. Mọi cảnh báo của một lần chạy phải đi theo file in
+    để trang hiện lại được: chốt chặn bỏ qua tô đặc, phủ thấp DTF, ảnh gốc nhỏ."""
+    monkeypatch.setattr(pipeline, "remove_bg", lambda img: Image.new("RGBA", img.size, (255, 255, 255, 255)))
+    src = dirs / "input" / "poster.png"
+    _poster_on_black(src)
+    assert pipeline.main(["--size", "1200x1200", "--keep-input", "--fill-holes", "--bg", "black", str(src)]) == 0
+    log = capsys.readouterr().out
+    notes = pipeline.read_meta(dirs / "output" / "poster_1200x1200_center.png")["notes"]
+    assert any(n.startswith("BỎ QUA --fill-holes") for n in notes)
+    assert any(n.startswith("CẢNH BÁO ảnh gốc nhỏ") for n in notes)
+    for n in notes:
+        assert n in log                                   # cùng câu chữ với terminal, không hai phiên bản
+
+    src2 = dirs / "input" / "sach.png"
+    im = Image.new("RGB", (240, 240), (0, 0, 0))
+    im.paste((215, 8, 22), (60, 60, 180, 180))
+    im.save(src2)
+    assert pipeline.main(["--size", "240x240", "--keep-input", str(src2)]) == 0
+    assert pipeline.read_meta(dirs / "output" / "sach_240x240_center.png")["notes"] == []
+
+
+def test_fill_limit_default_is_fifteen():
+    """Poster halftone 04_28_47 tô toàn thân chỉ thêm 12% mực trùng áo và lọt qua 20; ba ảnh người
+    thật thêm 8 đến 11%. 15 nằm giữa."""
+    assert pipeline.FILL_LIMIT == 15.0
+    assert pipeline.parse_args([]).fill_limit == 15.0

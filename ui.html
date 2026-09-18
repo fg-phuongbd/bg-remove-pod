@@ -118,6 +118,8 @@
   a.dl[hidden] { display: none; }
   #variantbox[hidden] { display: none; }
   #nums .cmd { flex-basis: 100%; }
+  /* Cảnh báo của lần chạy, cùng câu chữ với terminal: chốt chặn bỏ qua tô đặc, phủ thấp DTF, ảnh gốc nhỏ. */
+  #nums .note { flex-basis: 100%; color: #ffd479; font-size: 12px; padding: 6px 10px; border-left: 3px solid #ffd479; background: rgba(255,212,121,.08); }
   #nums .cmd b { font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; user-select: all; }
   body.drop::after {
     content: "Thả ảnh vào đây"; position: fixed; inset: 12px; border: 3px dashed var(--accent);
@@ -363,7 +365,8 @@ function showNums(r) {
     <div>tên file<b style="font-size:12px">${esc(r.out || "—")}</b></div>
     ${meta.how ? `<div>cách<b style="font-size:13px">${esc(meta.how)}</b></div>` : ""}
     ${meta.cmd ? `<div class="cmd" title="dòng lệnh chạy lại ra đúng file này">cờ đã dùng<b>${esc(meta.cmd)}</b></div>`
-               : `<div class="cmd">cờ đã dùng<b>— (file làm trước khi có mục này)</b></div>`}`;
+               : `<div class="cmd">cờ đã dùng<b>— (file làm trước khi có mục này)</b></div>`}
+    ${(meta.notes || []).map(n => `<div class="note">${esc(n)}</div>`).join("")}`;
 }
 
 function paintBg() {

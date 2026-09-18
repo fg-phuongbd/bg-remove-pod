@@ -38,7 +38,8 @@ DTF_COVERAGE = 102  # dưới 40% độ phủ: vùng nhận ít bột keo khi in
 DTF_WARN = 5.0  # cảnh báo khi vùng phủ thấp vượt quá ngần này phần trăm diện tích mực
 THIN_WARN = 5.0  # cảnh báo khi quá ngần này phần trăm mực nằm trong nét mảnh hơn MIN_FEATURE_MM
 SPECK_WARN = 1.0  # cảnh báo khi quá ngần này phần trăm mực là đốm rời nhỏ hơn SPECK_MM2
-FILL_LIMIT = 20.0  # --fill-holes bị bỏ qua nếu nó thêm quá ngần này phần trăm mực trùng màu áo
+FILL_LIMIT = 15.0  # --fill-holes bị bỏ qua nếu nó thêm quá ngần này phần trăm mực trùng màu áo:
+# ba ảnh người thật thêm 8-11%, poster halftone nhẹ nhất thêm 12%, ba poster còn lại 27-60%
 SOLID_SHARE = 0.5  # share of same-colored neighbours that makes a pixel part of a flat area
 KEY_FLOOR = 32.0  # default for --floor: colors closer than this to the background are shirt, not ink
 MERGE_DELTA_E = 12.0  # default for --merge: palette colors closer than this (CIELAB) are always merged
@@ -1248,6 +1249,11 @@ def _key_fidelity(original: Image.Image, kind: str) -> float:
 def process_one(src: Path, args: argparse.Namespace) -> Path:
     flags = flags_used(args)  # cờ như người dùng đặt, ghi vào file: --preset, không phải bản đã điền
     args = apply_preset(argparse.Namespace(**vars(args)))
+    notes: list[str] = []  # mọi cảnh báo của lần chạy này, in ra terminal và ghi vào file cho trang hiện lại
+
+    def warn(msg: str) -> None:
+        print("  " + msg)
+        notes.append(msg)
     box = target_box_px(args.size)
     inner = art_box(box, args.scale)
     original = load_image(src)
@@ -1257,9 +1263,9 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     grow = min(inner[0] / original.width, inner[1] / original.height)
     if not args.vector and grow > UPSCALE:
         times = f"{grow:.1f}".replace(".", ",")
-        print(f"  CẢNH BÁO ảnh gốc nhỏ: {original.width}x{original.height} px phải phóng {times} lần "
-              f"cho khung này, model chỉ làm nét được {UPSCALE} lần, phần dư là kéo giãn. "
-              f"Nếu thấy mờ, sinh lại ảnh ở kích thước lớn hơn.")
+        warn(f"CẢNH BÁO ảnh gốc nhỏ: {original.width}x{original.height} px phải phóng {times} lần "
+             f"cho khung này, model chỉ làm nét được {UPSCALE} lần, phần dư là kéo giãn. "
+             f"Nếu thấy mờ, sinh lại ảnh ở kích thước lớn hơn.")
 
     kind = detect_bg(original)
     bg, refine = choose_mode(args, kind)
@@ -1296,8 +1302,9 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             shirt_rgb = bg_color(original)  # nền đo được, cùng anchor với cột "mực trùng màu áo"
             added = redundant_ink(filled, original, shirt_rgb) - redundant_ink(keyed, original, shirt_rgb)
             if added > args.fill_limit:
-                print(f"  BỎ QUA --fill-holes: tô đặc sẽ thêm {added:.0f}% mực in đè lên áo cùng màu "
-                      f"(ngưỡng {args.fill_limit:g}%). Cờ này dành cho ảnh có người, không dành cho poster.")
+                warn(f"BỎ QUA --fill-holes: tô đặc sẽ thêm {added:.0f}% mực in đè lên áo cùng màu "
+                     f"(ngưỡng {args.fill_limit:g}%). Poster thì bỏ cờ này; ảnh người quá tối so với nền "
+                     f"thì đặt sàn tô đặc 32 (--fill-floor 32) rồi chạy lại.")
                 silhouette = None
             else:
                 keyed = filled
@@ -1334,8 +1341,9 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             shirt_rgb = bg_color(original)  # nền đo được, cùng anchor với cột "mực trùng màu áo"
             added = redundant_ink(filled, big_rgb, shirt_rgb) - redundant_ink(keyed, big_rgb, shirt_rgb)
             if added > args.fill_limit:
-                print(f"  BỎ QUA --fill-holes: trên bản in, tô đặc sẽ thêm {added:.0f}% mực in đè lên áo "
-                      f"cùng màu (ngưỡng {args.fill_limit:g}%). Thân hình quá tối so với nền; thử --fill-floor 32.")
+                warn(f"BỎ QUA --fill-holes: trên bản in, tô đặc sẽ thêm {added:.0f}% mực in đè lên áo "
+                     f"cùng màu (ngưỡng {args.fill_limit:g}%). Poster thì bỏ cờ này; ảnh người quá tối so với "
+                     f"nền thì đặt sàn tô đặc 32 (--fill-floor 32) rồi chạy lại.")
                 filled_in = False
             else:
                 keyed = filled
@@ -1369,13 +1377,14 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
                     fill=filled_in, cutout=(bg == "ai"), vector=args.vector, style=args.style,
                     colors=args.colors)
     out_path = OUTPUT_DIR / name
-    save_print_png(result, out_path, clean=not args.no_clean,
-                   meta={"flags": flags, "bg": kind, "mode": bg, "how": how, "cmd": cmd_line(flags)})
-    low = low_coverage(Image.open(out_path))
+    low = low_coverage(clean_print(result) if not args.no_clean else result)
     if low > args.dtf_warn:
-        print(f"  CẢNH BÁO in DTF: {low:.0f}% diện tích mực nằm dưới 40% độ phủ (ngưỡng {args.dtf_warn:g}%). "
-              f"Vùng đó nhận ít bột keo nên dễ bong; in thử một chiếc và giặt vài lần trước khi chạy số lượng. "
-              f"In DTG có lót trắng thì không sao.")
+        warn(f"CẢNH BÁO in DTF: {low:.0f}% diện tích mực nằm dưới 40% độ phủ (ngưỡng {args.dtf_warn:g}%). "
+             f"Vùng đó nhận ít bột keo nên dễ bong; in thử một chiếc và giặt vài lần trước khi chạy số lượng. "
+             f"In DTG có lót trắng thì không sao.")
+    save_print_png(result, out_path, clean=not args.no_clean,
+                   meta={"flags": flags, "bg": kind, "mode": bg, "how": how, "cmd": cmd_line(flags),
+                         "notes": notes})
     make_review(original, result, REVIEW_DIR / name, shirt=shirt)
     return out_path
 

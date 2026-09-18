@@ -333,3 +333,13 @@ def test_server_serves_a_soft_proof_of_the_print_file(server, workspace):
     assert status == 200 and Image.open(io.BytesIO(body)).mode == "RGBA"
     rep = json.loads(get(server, "/api/report/a.png")[1])
     assert "gamut" in rep
+
+
+def test_report_carries_the_run_notes_for_the_page(server, workspace, monkeypatch):
+    monkeypatch.setattr(pipeline, "remove_bg", lambda img: Image.new("RGBA", img.size, (255, 255, 255, 255)))
+    src = workspace / "input" / "a.png"
+    _design(src)
+    pipeline.process_one(src, ui.make_args({"size": "1500x1500", "fill_holes": True}))
+    rep = json.loads(get(server, "/api/report/a.png")[1])
+    assert isinstance(rep["meta"]["notes"], list) and rep["meta"]["notes"]
+    assert any("ảnh gốc nhỏ" in n for n in rep["meta"]["notes"])
