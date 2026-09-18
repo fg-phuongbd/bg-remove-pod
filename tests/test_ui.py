@@ -268,3 +268,47 @@ def test_audit_endpoint_grades_the_batch(server, workspace):
     rows = json.loads(get(server, "/api/audit")[1])
     flagged = [r for r in rows if r["why"]]
     assert len(flagged) == 1 and "fill-holes" in flagged[0]["why"][0]
+
+
+def test_list_images_lists_every_print_file_of_an_image(workspace):
+    """Một ảnh gốc có thể có nhiều file in (khác khung, vị trí, mực); trang phải thấy hết chứ
+    không chỉ bản mới nhất."""
+    _design(workspace / "input" / "a.png")
+    out = workspace / "output"
+    import os, time
+    for i, n in enumerate(("a_4500x5100_center.png", "a_4500x5100_top-right_26pc.png")):
+        Image.new("RGBA", (4, 4)).save(out / n)
+        os.utime(out / n, (time.time() + i, time.time() + i))
+    row = {r["name"]: r for r in ui.list_images()}["a.png"]
+    assert row["outs"] == ["a_4500x5100_top-right_26pc.png", "a_4500x5100_center.png"]
+    assert row["out"] == row["outs"][0]
+
+
+def test_server_serves_the_print_file_asked_for(server, workspace):
+    src = workspace / "input" / "a.png"
+    _design(src)
+    pipeline.process_one(src, ui.make_args({"size": "300x300"}))
+    pipeline.process_one(src, ui.make_args({"size": "300x300", "place": "top-right", "scale": 26.0}))
+    other = urllib.parse.quote("a_300x300_top-right_26pc.png")
+
+    with urllib.request.urlopen(server + "/file/a.png?out=" + other) as r:  # noqa: S310
+        assert "a_300x300_top-right_26pc.png" in r.headers["Content-Disposition"]
+    with urllib.request.urlopen(server + "/file/a.png") as r:  # noqa: S310
+        assert "a_300x300_top-right_26pc.png" in r.headers["Content-Disposition"], "không hỏi thì bản mới nhất"
+
+    rep = json.loads(get(server, "/api/report/a.png?out=" + urllib.parse.quote("a_300x300_center.png"))[1])
+    assert rep["out"] == "a_300x300_center.png"
+    assert rep["meta"]["cmd"] == "./run.sh --size 300x300"      # trang hiện được cờ đã dùng
+    rep = json.loads(get(server, "/api/report/a.png?out=" + other)[1])
+    assert "--place top-right" in rep["meta"]["cmd"]
+
+    status, body = get(server, "/out/a.png?out=" + other)
+    assert status == 200 and Image.open(io.BytesIO(body)).size[0] <= ui.PREVIEW_PX
+
+    # file của ảnh khác, hay tên bịa, không được trả về dưới tên ảnh này
+    _design(workspace / "input" / "b.png")
+    pipeline.process_one(workspace / "input" / "b.png", ui.make_args({"size": "300x300"}))
+    for bad in ("b_300x300_center.png", "../input/a.png", "khong-co.png"):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            get(server, "/file/a.png?out=" + urllib.parse.quote(bad))
+        assert e.value.code == 404

@@ -100,7 +100,8 @@ def list_images() -> list[dict]:
                 continue
             outs = outputs_for(p.stem)
             seen[p.name] = {"name": p.name, "waiting": waiting, "mtime": p.stat().st_mtime,
-                            "done": bool(outs), "out": outs[0].name if outs else None}
+                            "done": bool(outs), "out": outs[0].name if outs else None,
+                            "outs": [o.name for o in outs]}
     return sorted(seen.values(), key=lambda r: -r["mtime"])
 
 
@@ -113,6 +114,22 @@ def outputs_for(stem: str) -> list[Path]:
         return []
     hits = [p for p in pipeline.OUTPUT_DIR.glob(f"{glob.escape(stem)}_*.png")]
     return sorted(hits, key=lambda p: -p.stat().st_mtime)
+
+
+def pick_output(name: str, wanted: str | None) -> Path:
+    """File in của ảnh gốc `name`: bản có tên `wanted` nếu hỏi, không thì bản mới nhất.
+
+    Tên hỏi phải là một trong các file in của đúng ảnh này, không được là file của ảnh khác hay
+    một đường dẫn bịa: trang chỉ chọn trong danh sách nó đã được cho xem."""
+    outs = outputs_for(source_path(name).stem)
+    if not outs:
+        raise FileNotFoundError(name)
+    if not wanted:
+        return outs[0]
+    for o in outs:
+        if o.name == wanted:
+            return o
+    raise FileNotFoundError(f"{name} không có file in {wanted!r}")
 
 
 def source_path(name: str) -> Path:
@@ -215,6 +232,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - tên do BaseHTTPRequestHandler quy định
         route = urlparse(self.path)
         parts = [unquote(s) for s in route.path.strip("/").split("/")]
+        wanted = parse_qs(route.query).get("out", [None])[0]  # file in nào của ảnh, nếu hỏi
         try:
             if route.path == "/favicon.ico":
                 self.send_response(204)
@@ -232,28 +250,24 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(pipeline.audit_rows(srcs))
             elif parts[0] == "api" and parts[1] == "report" and len(parts) == 3:
                 src = source_path(parts[2])
-                outs = outputs_for(src.stem)
-                if outs:
-                    rep = measure(outs[0], src)
-                    self._json(dict(rep, **pipeline.print_verdict(rep), out=outs[0].name))
-                else:
+                if not outputs_for(src.stem):
                     self._json({})
+                else:
+                    out = pick_output(parts[2], wanted)
+                    rep = measure(out, src)
+                    self._json(dict(rep, **pipeline.print_verdict(rep), out=out.name,
+                                    meta=pipeline.read_meta(out)))
             elif parts[0] == "src" and len(parts) == 2:
                 self._file(preview(source_path(parts[1]), THUMB_PX, "src"))
             elif parts[0] == "out" and len(parts) == 2:
-                outs = outputs_for(source_path(parts[1]).stem)
-                if not outs:
-                    raise FileNotFoundError(parts[1])
-                self._file(preview(outs[0], PREVIEW_PX, "out"))
+                self._file(preview(pick_output(parts[1], wanted), PREVIEW_PX, "out"))
             elif parts[0] == "file" and len(parts) == 2:
-                outs = outputs_for(source_path(parts[1]).stem)
-                if not outs:
-                    raise FileNotFoundError(parts[1])
-                body = outs[0].read_bytes()
+                out = pick_output(parts[1], wanted)
+                body = out.read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", "image/png")
                 self.send_header("Content-Length", str(len(body)))
-                self.send_header("Content-Disposition", f'attachment; filename="{outs[0].name}"')
+                self.send_header("Content-Disposition", f'attachment; filename="{out.name}"')
                 self.end_headers()
                 self.wfile.write(body)
             else:

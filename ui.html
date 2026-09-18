@@ -110,6 +110,9 @@
     border-radius: 6px; padding: 6px 12px; font-size: 12px;
   }
   a.dl[hidden] { display: none; }
+  #variantbox[hidden] { display: none; }
+  #nums .cmd { flex-basis: 100%; }
+  #nums .cmd b { font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; user-select: all; }
   body.drop::after {
     content: "Thả ảnh vào đây"; position: fixed; inset: 12px; border: 3px dashed var(--accent);
     border-radius: 14px; display: grid; place-items: center; font-size: 20px; font-weight: 600;
@@ -134,6 +137,7 @@
     <label>cùng lúc <input type="number" id="workers" value="2" min="1" max="6" step="1"></label>
     <span style="flex:1"></span>
     <button id="auditbtn" class="ghost">Chấm cả lô</button>
+    <label id="variantbox" hidden>bản in <select id="variant" title="ảnh này có nhiều file in, chọn bản muốn xem"></select></label>
     <a class="dl" id="dl" hidden download>Tải file in</a>
     <label>nền xem
       <select id="bgpick">
@@ -288,25 +292,35 @@ async function loadList() {
   }
 }
 
-async function select(name) {
+// Một ảnh gốc có thể có nhiều file in (khác khung, vị trí, mực). Không nói gì thì xem bản mới
+// nhất; ô "bản in" đổi sang bản khác. Mọi đường dẫn file đều mang theo bản đang xem.
+async function select(name, variant) {
   state.pick = name;
   writeBar(settingsFor(name));
   loadList();
+  const im = state.images.find(i => i.name === name);
+  const outs = (im && im.outs) || [];
+  if (!variant || !outs.includes(variant)) variant = outs[0] || null;
+  state.variant = variant;
+  const q = variant ? `?out=${encodeURIComponent(variant)}` : "";
+  const box = $("#variantbox"), sel = $("#variant");
+  box.hidden = outs.length < 2;
+  sel.innerHTML = outs.map(o => `<option${o === variant ? " selected" : ""}>${esc(o)}</option>`).join("");
   $("#srcview").innerHTML = `<img src="/src/${encodeURIComponent(name)}" alt="">`;
   $("#dl").hidden = true;
   const out = $("#outview");
-  out.innerHTML = `<img src="/out/${encodeURIComponent(name)}?t=${Date.now()}" alt=""
+  out.innerHTML = `<img src="/out/${encodeURIComponent(name)}${q}${q ? "&" : "?"}t=${Date.now()}" alt=""
                         onerror="this.replaceWith(Object.assign(document.createElement('div'),
                         {className:'empty', textContent:'Chưa có file in. Bấm Chạy.'}))">`;
   state.report = null;
   $("#nums").innerHTML = "";
   try {
-    const rep = await api(`/api/report/${encodeURIComponent(name)}`);
-    if (rep && rep.shirt) {
+    const rep = await api(`/api/report/${encodeURIComponent(name)}${q}`);
+    if (rep && rep.out) {
       state.report = rep;
       showNums(rep);
       const dl = $("#dl");
-      dl.href = `/file/${encodeURIComponent(name)}`;
+      dl.href = `/file/${encodeURIComponent(name)}${q}`;
       dl.setAttribute("download", rep.out || "");
       dl.textContent = "Tải file in";
       dl.title = rep.out || "";
@@ -315,19 +329,27 @@ async function select(name) {
   } catch (e) { /* chưa chạy thì chưa có số, không sao */ }
   paintBg();
 }
+$("#variant").onchange = () => { if (state.pick) select(state.pick, $("#variant").value); };
 
 function showNums(r) {
   const v = r.muc ? `<div class="verdict ${r.muc}">
       <div class="lbl">${esc(r.nhan)}</div>
       ${r.why && r.why.length ? `<div class="why">${r.why.map(w => "• " + esc(w)).join("<br>")}</div>` : ""}
     </div>` : "";
+  // Cột "—" là không đo được, không phải 0: file cắt hình in lên áo khác màu nền mà ta không
+  // biết là màu gì, còn file một màu mực thì cố ý khác ảnh gốc.
+  const na = "không đo được với file cắt hình cho áo khác màu nền";
+  const meta = r.meta || {};
   $("#nums").innerHTML = v + `
     <div>mực đặc<b>${r.dac}%</b></div>
-    <div>mực trùng màu áo<b>${r.thua}%</b></div>
+    <div title="${r.thua == null ? na : ""}">mực trùng màu áo<b>${r.thua == null ? "—" : r.thua + "%"}</b></div>
     <div title="dưới 40% độ phủ: in DTF dễ bong">phủ thấp<b${r.phu_thap > 5 ? ' style="color:#ffd479"' : ''}>${r.phu_thap}%</b></div>
-    <div>sai số khi in<b>${r.sai_so ?? "—"}</b></div>
-    <div>màu áo<b style="font-size:13px">${r.shirt}</b></div>
-    <div>tên file<b style="font-size:12px">${r.out || "—"}</b></div>`;
+    <div title="${r.sai_so == null ? "không đo được: file cắt hình hoặc một màu mực" : ""}">sai số khi in<b>${r.sai_so ?? "—"}</b></div>
+    <div>màu áo<b style="font-size:13px">${r.shirt || "khác màu nền, chọn ở ô nền xem"}</b></div>
+    <div>tên file<b style="font-size:12px">${esc(r.out || "—")}</b></div>
+    ${meta.how ? `<div>cách<b style="font-size:13px">${esc(meta.how)}</b></div>` : ""}
+    ${meta.cmd ? `<div class="cmd" title="dòng lệnh chạy lại ra đúng file này">cờ đã dùng<b>${esc(meta.cmd)}</b></div>`
+               : `<div class="cmd">cờ đã dùng<b>— (file làm trước khi có mục này)</b></div>`}`;
 }
 
 function paintBg() {
@@ -335,7 +357,7 @@ function paintBg() {
   const el = $("#outview");
   el.classList.toggle("checker", v === "checker");
   el.style.background = v === "checker" ? "" :
-    (v === "shirt" ? (state.report ? state.report.shirt : "#808080") : v);
+    (v === "shirt" ? ((state.report && state.report.shirt) || "#808080") : v);
 }
 
 async function run(names) {
@@ -372,7 +394,7 @@ async function poll() {
   $("#run").disabled = $("#runall").disabled = false;
   state.polling = false;
   await loadList();
-  if (state.pick) await select(state.pick);
+  if (state.pick) await select(state.pick);   // bản mới nhất, tức file vừa chạy xong
 }
 
 $("#run").onclick = () => run(state.pick ? [state.pick] : []).catch(e => $("#msg").textContent = e.message);
@@ -386,11 +408,12 @@ $("#auditbtn").onclick = async () => {
   btn.textContent = "đang chấm…";
   try {
     const rows = await api("/api/audit");
-    const avg = k => (rows.reduce((s, r) => s + (r[k] || 0), 0) / (rows.length || 1)).toFixed(2);
+    const avg = k => { const v = rows.map(r => r[k]).filter(x => x != null);
+                       return v.length ? (v.reduce((s, x) => s + x, 0) / v.length).toFixed(2) : "—"; };
     $("#audit").innerHTML = rows.length ? `<table>
       <tr><th>đặc %</th><th title="dưới 40% độ phủ: in DTF dễ bong">phủ thấp %</th><th>thừa %</th><th>sai số</th><th>file</th></tr>
       ${rows.map(r => `<tr class="${r.why.length ? "warn" : ""}">
-        <td>${r.dac}</td><td>${r.phu_thap}</td><td>${r.thua}</td><td>${r.sai_so ?? "—"}</td>
+        <td>${r.dac}</td><td>${r.phu_thap}</td><td>${r.thua ?? "—"}</td><td>${r.sai_so ?? "—"}</td>
         <td>${esc(r.name)}${r.why.length ? `<div class="why">${r.why.map(esc).join("<br>")}</div>` : ""}</td>
       </tr>`).join("")}
       <tr><td>${avg("dac")}</td><td>${avg("phu_thap")}</td><td>${avg("thua")}</td><td>${avg("sai_so")}</td>
