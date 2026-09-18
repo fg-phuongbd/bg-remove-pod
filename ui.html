@@ -344,6 +344,8 @@ function showNums(r) {
     <div>mực đặc<b>${r.dac}%</b></div>
     <div title="${r.thua == null ? na : ""}">mực trùng màu áo<b>${r.thua == null ? "—" : r.thua + "%"}</b></div>
     <div title="dưới 40% độ phủ: in DTF dễ bong">phủ thấp<b${r.phu_thap > 5 ? ' style="color:#ffd479"' : ''}>${r.phu_thap}%</b></div>
+    <div title="mực trong nét mảnh hơn 0,5 mm: in DTF dễ bong, thử 'nới nét DTF'">nét mảnh<b${r.manh > 5 ? ' style="color:#ffd479"' : ''}>${r.manh ?? "—"}%</b></div>
+    <div title="mực là đốm rời nhỏ hơn 1 mm²: dễ rơi khỏi bàn ép">đốm nhỏ<b${r.dom > 1 ? ' style="color:#ffd479"' : ''}>${r.dom ?? "—"}%</b></div>
     <div title="${r.sai_so == null ? "không đo được: file cắt hình hoặc một màu mực" : ""}">sai số khi in<b>${r.sai_so ?? "—"}</b></div>
     <div>màu áo<b style="font-size:13px">${r.shirt || "khác màu nền, chọn ở ô nền xem"}</b></div>
     <div>tên file<b style="font-size:12px">${esc(r.out || "—")}</b></div>
@@ -411,12 +413,12 @@ $("#auditbtn").onclick = async () => {
     const avg = k => { const v = rows.map(r => r[k]).filter(x => x != null);
                        return v.length ? (v.reduce((s, x) => s + x, 0) / v.length).toFixed(2) : "—"; };
     $("#audit").innerHTML = rows.length ? `<table>
-      <tr><th>đặc %</th><th title="dưới 40% độ phủ: in DTF dễ bong">phủ thấp %</th><th>thừa %</th><th>sai số</th><th>file</th></tr>
+      <tr><th>đặc %</th><th title="dưới 40% độ phủ: in DTF dễ bong">phủ thấp %</th><th title="nét mảnh hơn 0,5 mm">mảnh %</th><th>thừa %</th><th>sai số</th><th>file</th></tr>
       ${rows.map(r => `<tr class="${r.why.length ? "warn" : ""}">
-        <td>${r.dac}</td><td>${r.phu_thap}</td><td>${r.thua ?? "—"}</td><td>${r.sai_so ?? "—"}</td>
+        <td>${r.dac}</td><td>${r.phu_thap}</td><td>${r.manh ?? "—"}</td><td>${r.thua ?? "—"}</td><td>${r.sai_so ?? "—"}</td>
         <td>${esc(r.name)}${r.why.length ? `<div class="why">${r.why.map(esc).join("<br>")}</div>` : ""}</td>
       </tr>`).join("")}
-      <tr><td>${avg("dac")}</td><td>${avg("phu_thap")}</td><td>${avg("thua")}</td><td>${avg("sai_so")}</td>
+      <tr><td>${avg("dac")}</td><td>${avg("phu_thap")}</td><td>${avg("manh")}</td><td>${avg("thua")}</td><td>${avg("sai_so")}</td>
           <td>trung bình của ${rows.length} file</td></tr></table>`
       : '<div class="empty">Chưa có file in nào để chấm.</div>';
   } catch (e) { $("#msg").textContent = e.message; }

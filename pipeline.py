@@ -36,6 +36,8 @@ REMBG_MODEL = "birefnet-general"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 DTF_COVERAGE = 102  # dưới 40% độ phủ: vùng nhận ít bột keo khi in DTF, dễ bong sau vài lần giặt
 DTF_WARN = 5.0  # cảnh báo khi vùng phủ thấp vượt quá ngần này phần trăm diện tích mực
+THIN_WARN = 5.0  # cảnh báo khi quá ngần này phần trăm mực nằm trong nét mảnh hơn MIN_FEATURE_MM
+SPECK_WARN = 1.0  # cảnh báo khi quá ngần này phần trăm mực là đốm rời nhỏ hơn SPECK_MM2
 FILL_LIMIT = 20.0  # --fill-holes bị bỏ qua nếu nó thêm quá ngần này phần trăm mực trùng màu áo
 SOLID_SHARE = 0.5  # share of same-colored neighbours that makes a pixel part of a flat area
 KEY_FLOOR = 32.0  # default for --floor: colors closer than this to the background are shirt, not ink
@@ -62,13 +64,15 @@ def load_image(path: Path) -> Image.Image:
     return ImageOps.exif_transpose(im).convert("RGBA")
 
 
-def out_name(stem: str, box: tuple[int, int], place: str, scale: float, ink: str = "none") -> str:
-    """Tên file in: tên ảnh, khung in, vị trí, rồi cỡ và màu mực nếu khác mặc định.
+def out_name(stem: str, box: tuple[int, int], place: str, scale: float, ink: str = "none",
+             dtf_safe: bool = False) -> str:
+    """Tên file in: tên ảnh, khung in, vị trí, rồi cỡ, màu mực và nới nét nếu khác mặc định.
 
     Cỡ và màu mực chỉ xuất hiện khi khác mặc định để tên vẫn gọn (`name_4500x5100_center.png`),
     nhưng hai bản khác cỡ hoặc khác mực thì không đè lên nhau."""
     tail = "" if scale == 100.0 else f"_{scale:g}pc"
     tail += "" if ink.strip().lower() in ("", "none") else f"_ink-{ink.strip().lower().lstrip('#')}"
+    tail += "_dtf-safe" if dtf_safe else ""
     return f"{stem}_{box[0]}x{box[1]}_{place}{tail}.png"
 
 
@@ -991,6 +995,58 @@ def read_meta(path: Path) -> dict | None:
     return json.loads(raw) if raw else None
 
 
+MIN_FEATURE_MM = 0.5  # nét mảnh hơn mức này bám keo DTF kém và bong sau vài lần giặt
+SPECK_MM2 = 1.0  # đốm rời nhỏ hơn diện tích này (mm²) là hạt bụi trên bàn ép, dễ rơi
+
+
+def _ink_pieces(alpha: np.ndarray, dpi: int = DPI) -> tuple[np.ndarray, np.ndarray, int]:
+    """Mực đục (alpha > 128), phần của nó mảnh hơn MIN_FEATURE_MM, và bán kính co tính bằng px."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    ink = alpha > 128
+    r = max(1, round(MIN_FEATURE_MM / 2 / 25.4 * dpi))
+    core = ndimage.binary_opening(ink, structure=np.ones((2 * r + 1, 2 * r + 1), bool))
+    return ink, ink & ~core, r
+
+
+def fine_ink(img: Image.Image, dpi: int = DPI) -> dict:
+    """Hai phần trăm mực mà DTF hay bong: `manh` nằm trong nét mảnh hơn 0,5 mm, `dom` là đốm rời
+    nhỏ hơn 1 mm². Đo trên chính file in ở DPI của nó. Poster halftone đo được 8 đến 16% mảnh và
+    2 đến 3% đốm; chữ, logo và ảnh chụp dưới 3% và 0,1%."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    alpha = np.asarray(img.convert("RGBA"))[:, :, 3]
+    ink, thin, _ = _ink_pieces(alpha, dpi)
+    total = float(ink.sum())
+    if not total:
+        return {"manh": 0.0, "dom": 0.0}
+    labels, n = ndimage.label(ink)
+    sizes = np.asarray(ndimage.sum(ink, labels, range(1, n + 1))) if n else np.zeros(0)
+    px_mm = dpi / 25.4
+    speck = float(sizes[sizes < SPECK_MM2 * px_mm * px_mm].sum()) if n else 0.0
+    return {"manh": round(100.0 * float(thin.sum()) / total, 1), "dom": round(100.0 * speck / total, 2)}
+
+
+def min_feature(img: Image.Image, mm: float = MIN_FEATURE_MM, dpi: int = DPI) -> Image.Image:
+    """Nới mọi nét và đốm mảnh hơn `mm` ra đúng `mm`, giữ nguyên phần còn lại.
+
+    Chỉ phần mảnh được nở ra, nên mảng khối và mép của nó không đổi. Pixel mới lấy màu và alpha
+    của pixel mực gần nhất, tức nét dày lên bằng chính màu của nó, không thêm màu lạ. Đây là
+    'nét tối thiểu' thợ in lụa vẫn làm tay: mất một chút chi tiết, đổi lấy áo không bong sau khi
+    giặt."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    a = np.asarray(img.convert("RGBA")).copy()
+    ink, thin, r = _ink_pieces(a[:, :, 3], dpi)
+    if not thin.any():
+        return Image.fromarray(a, "RGBA")
+    grown = ndimage.binary_dilation(thin, structure=np.ones((2 * r + 1, 2 * r + 1), bool))
+    new = grown & ~ink
+    _, (iy, ix) = ndimage.distance_transform_edt(~ink, return_indices=True)
+    a[new] = a[iy[new], ix[new]]
+    return Image.fromarray(a, "RGBA")
+
+
 def save_print_png(img: Image.Image, path: Path, clean: bool = True, meta: dict | None = None) -> None:
     """Lưu file in: dọn mực vô hình, gắn hồ sơ màu sRGB, ghi DPI, ghi cách file được tạo.
 
@@ -1048,6 +1104,8 @@ def measure_print(out: Path, src: Path) -> dict:
     loại thiết kế: poster halftone thấp là đúng, logo phẳng thấp là đáng ngờ.
     `phu_thap`: phần trăm mực nằm dưới 40% độ phủ. In DTF thì vùng đó nhận ít bột keo nên dễ bong
     sau vài lần giặt; in DTG có lót trắng thì không sao.
+    `manh`, `dom`: phần trăm mực trong nét mảnh hơn 0,5 mm và trong đốm rời nhỏ hơn 1 mm², hai
+    thứ DTF hay bong; xem fine_ink.
     `thua`: phần trăm mực đục nhưng trùng màu áo, tức chỗ máy phủ lót trắng rồi in đè lên vải.
     `sai_so`: ghép file lên màu áo rồi so với ảnh gốc, theo mức trên 255.
 
@@ -1060,10 +1118,12 @@ def measure_print(out: Path, src: Path) -> dict:
     alpha = o[:, :, 3]
     ink = alpha > 0
     if not ink.any():
-        return {"dac": 0.0, "phu_thap": 0.0, "thua": 0.0, "sai_so": None, "shirt": "#808080"}
+        return {"dac": 0.0, "phu_thap": 0.0, "manh": 0.0, "dom": 0.0, "thua": 0.0, "sai_so": None,
+                "shirt": "#808080"}
     rep = {
         "dac": round(100 * float((alpha[ink] > 250).mean()), 1),
         "phu_thap": round(100 * float((alpha[ink] < DTF_COVERAGE).mean()), 1),
+        **fine_ink(Image.fromarray(o.astype(np.uint8), "RGBA")),
     }
     meta = read_meta(out) or {}
     if meta.get("mode") in ("ai", "none"):
@@ -1196,7 +1256,9 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         # Màu nền thật, không phải màu áo dùng để xem: (20, 20, 22) chỉ để ảnh so sánh nhìn ra vải,
         # còn phép tách một màu phải hỏi đúng cái nền mà bước key đã giải ngược.
         result = one_ink(result, ink, bg_rgb(original, bg) if bg in BG_KINDS else bg_color(original))
-    name = out_name(src.stem, box, args.place, args.scale, args.ink)
+    if args.dtf_safe:
+        result = min_feature(result)
+    name = out_name(src.stem, box, args.place, args.scale, args.ink, args.dtf_safe)
     out_path = OUTPUT_DIR / name
     save_print_png(result, out_path, clean=not args.no_clean,
                    meta={"flags": flags, "bg": kind, "mode": bg, "how": how, "cmd": cmd_line(flags)})
@@ -1227,6 +1289,12 @@ def print_verdict(report: dict, dtf_warn: float = DTF_WARN) -> dict:
     if report.get("phu_thap", 0) > dtf_warn:
         soft.append(f"{report['phu_thap']:.0f}% diện tích mực dưới 40% độ phủ, in DTF dễ bong. "
                     f"In thử một chiếc và giặt vài lần trước khi chạy số lượng")
+    if report.get("manh", 0) > THIN_WARN:
+        soft.append(f"{report['manh']:.0f}% mực nằm trong nét mảnh hơn {f'{MIN_FEATURE_MM:g}'.replace('.', ',')} mm, in DTF dễ bong. "
+                    f"Chạy lại với --dtf-safe để nới nét, hoặc in thử rồi giặt")
+    if report.get("dom", 0) > SPECK_WARN:
+        soft.append(f"{report['dom']:.1f}% mực là đốm rời nhỏ hơn {SPECK_MM2:g} mm², dễ rơi khỏi bàn ép. "
+                    f"--dtf-safe nới đốm ra, hoặc chấp nhận mất vài đốm")
     if report["dac"] < 50:
         soft.append("mực mỏng, đúng với poster halftone nhưng đáng ngờ với đồ họa phẳng")
     muc = "hong" if hard else ("xem" if soft else "dat")
@@ -1262,11 +1330,11 @@ def audit(sources: list[Path]) -> int:
         known = [v for v in vals if v is not None]
         return f"{sum(known) / len(known):.2f}" if known else "—"
 
-    print(f"{'đặc%':>6s} {'phủ thấp%':>10s} {'thừa%':>7s} {'sai số':>7s}  file")
+    print(f"{'đặc%':>6s} {'phủ thấp%':>10s} {'mảnh%':>6s} {'đốm%':>5s} {'thừa%':>7s} {'sai số':>7s}  file")
     for r in rows:
         mark = {"dat": "", "xem": "  <-- xem lại", "hong": "  <-- KHÔNG DÙNG ĐƯỢC"}[r["muc"]]
-        print(f"{r['dac']:6.1f} {r['phu_thap']:10.1f} {num(r['thua'], 7, 2)} {num(r['sai_so'], 7, 2)}"
-              f"  {r['name'][:46]}{mark}")
+        print(f"{r['dac']:6.1f} {r['phu_thap']:10.1f} {r.get('manh', 0):6.1f} {r.get('dom', 0):5.1f} "
+              f"{num(r['thua'], 7, 2)} {num(r['sai_so'], 7, 2)}  {r['name'][:40]}{mark}")
     d = [r["dac"] for r in rows]
     print(f"\n{len(rows)} file | mực đặc tb {sum(d)/len(d):.1f}% | mực thừa tb {mean([r['thua'] for r in rows])}% | "
           f"sai số tb {mean([r['sai_so'] for r in rows])}  (— = không đo được, áo khác màu nền)")
@@ -1339,6 +1407,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--dtf-warn", type=float, default=DTF_WARN,
                    help=f"cảnh báo khi quá ngần này phần trăm diện tích mực nằm dưới 40%% độ phủ, mức mà in DTF "
                         f"dễ bong. Mặc định {DTF_WARN:g}. 100 = tắt cảnh báo")
+    p.add_argument("--dtf-safe", action="store_true",
+                   help=f"nới mọi nét và đốm mảnh hơn {MIN_FEATURE_MM:g} mm ra đúng {MIN_FEATURE_MM:g} mm bằng chính màu của nó, "
+                        "để in DTF không bong. Mất một chút chi tiết ở halftone và vệt bắn. Tên file thêm _dtf-safe")
     p.add_argument("--no-clean", action="store_true",
                    help="không dọn mực vô hình trước khi lưu (mặc định có dọn: bỏ alpha dưới 8 và các đốm "
                         "nhỏ hơn 0,5mm mà không chỗ nào đậm quá 40)")

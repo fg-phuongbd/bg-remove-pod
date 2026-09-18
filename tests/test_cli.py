@@ -482,7 +482,9 @@ def test_grainy_art_is_upscaled_with_lanczos(dirs, monkeypatch, capsys):
 def test_verdict_and_audit_carry_fine_ink(dirs, capsys):
     from tests.test_export import _strokes
     src = dirs / "input" / "net.png"
-    _poster_on_black(src)
+    im = Image.new("RGB", (240, 240), (0, 0, 0))          # nguồn sạch: sai số key phải gần 0
+    im.paste((215, 8, 22), (60, 60, 180, 180))
+    im.save(src)
     out = dirs / "output" / "net_300x300_center.png"
     pipeline.save_print_png(_strokes(), out, clean=False)
     rep = pipeline.measure_print(out, src)
