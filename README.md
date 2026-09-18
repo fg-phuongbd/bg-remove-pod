@@ -94,7 +94,7 @@ mỗi ảnh dùng cờ riêng của nó. Ô `cùng lúc` đặt số ảnh chạ
 hơn rõ, cao hơn nữa thì máy đuối vì mỗi ảnh giữ vài mảng cỡ 5000 x 5000 trong bộ nhớ. Mỗi ảnh mất
 khoảng 14 giây, hoặc 45 giây nếu bật `thân hình đặc` vì phải chạy thêm model cắt hình.
 
-**5. Đọc kết luận.** Ô màu trả lời thẳng, bốn con số bên cạnh là dẫn chứng. Dưới các con số là
+**5. Đọc kết luận.** Ô màu trả lời thẳng, các con số bên cạnh là dẫn chứng. Dưới các con số là
 `cách` pipeline đã chọn và `cờ đã dùng`, một dòng lệnh dán lại vào terminal là ra đúng file này.
 
 Một ảnh gốc có nhiều file in (chạy `chest-left` rồi chạy `center`) thì ô **bản in** cạnh nút tải
@@ -103,19 +103,22 @@ hiện ra để chọn bản muốn xem; không chọn thì là bản mới nh�
 | Mức | Nghĩa |
 |---|---|
 | Đủ điều kiện in | không thấy vấn đề nào, tải file về và gửi xưởng |
-| In được, nên xem lại | phủ thấp vượt ngưỡng DTF, hoặc mực mỏng bất thường |
+| In được, nên xem lại | phủ thấp, nét mảnh hay đốm nhỏ vượt ngưỡng DTF, nhiều màu ngoài gamut, hoặc mực mỏng bất thường |
 | Không dùng được | file rỗng, mực in đè lên áo cùng màu quá 20%, hoặc sai số khi in quá 5 |
 
 Luật quyết định nằm ở `print_verdict` trong `pipeline.py`, dùng chung với `--audit`, nên dòng lệnh và
 trang không bao giờ nói khác nhau.
 
-### Bốn con số
+### Các con số
 
 | Số | Nghĩa | Đọc thế nào |
 |---|---|---|
 | mực đặc | phần trăm pixel đục hoàn toàn | So trong cùng loại thiết kế. Logo phẳng dưới 85% là đáng ngờ; poster halftone 42% vẫn đúng. |
 | mực trùng màu áo | mực đục nhưng cùng màu áo, tức chỗ máy phủ lót trắng rồi in đè lên vải | Dưới 5% thì bỏ qua. Trên 20% gần như chắc là bật `thân hình đặc` nhầm cho poster. |
 | phủ thấp | mực nằm dưới 40% độ phủ | Cột quan trọng nhất với **in DTF**: vùng đó nhận ít bột keo nên dễ bong. Trên 5% thì in thử một chiếc, giặt vài lần rồi hãy chạy số lượng. In DTG có lót trắng thì không sao. |
+| nét mảnh | mực nằm trong nét mảnh hơn 0,5 mm | DTF bám kém ở nét mảnh. Trên 5% thì bật `nới nét DTF` (`--dtf-safe`) hoặc in thử. Poster halftone đo được 8 đến 16%, chữ và logo dưới 3%. |
+| đốm nhỏ | mực là đốm rời nhỏ hơn 1 mm² | Đốm dễ rơi khỏi bàn ép. Trên 1% thì như trên. Đốm mờ đã được dọn sẵn khi lưu; đây là đốm đậm. |
+| ngoài gamut | mực lệch quá 25 ΔE sau khi đi qua hồ sơ CMYK, tức xỉn hẳn | Xanh lá chói, xanh dương thuần, tím, đỏ 255 của ảnh AI không mực nào pha ra. Trên 30% thì bật **xem như in** để thấy trước và quyết định có đổi màu không. Xem mục **Màu in được và màu không**. |
 | sai số khi in | ghép file lên màu áo rồi so với ảnh gốc, thang 0 đến 255 | Dưới 1 là mắt không thấy. Trên 5 thì mở ảnh so sánh trong `review/` xem bằng mắt. |
 
 Hai cột sau chỉ có nghĩa khi áo là màu nền ảnh gốc. File cắt hình (`áo` = other) in lên áo khác màu
@@ -173,10 +176,30 @@ và có thể để lại vụn nhỏ ở viền.
 
 Dòng đầu khi xử lý in ra quyết định này, ví dụ `nền: color | áo: khác màu nền | cách: cắt hình + tinh chỉnh viền`.
 
-Sau đó ảnh đi qua **raster** (mặc định): upscale 4 lần bằng Real-ESRGAN, giữ nguyên màu và chi tiết,
-co về khung in. Model upscale được chọn theo kiểu thiết kế: tranh phẳng và line art ít màu dùng model
-anime, tranh có gradient/texture dùng model chung. Với **minh họa phẳng thật sự** (mảng màu, không gradient), thêm
-`--vector` để gom màu rồi trace vector: mảng màu tuyệt đối phẳng, viền cong mượt ở mọi kích cỡ.
+Sau đó ảnh đi qua **raster** (mặc định): upscale 4 lần rồi co về khung in, giữ nguyên màu và chi
+tiết. Cách upscale được chọn theo kiểu thiết kế, xem mục **Ba cách upscale**. Với **minh họa phẳng
+thật sự** (mảng màu, không gradient), thêm `--vector` để gom màu rồi trace vector: mảng màu tuyệt đối
+phẳng, viền cong mượt ở mọi kích cỡ.
+
+## Ba cách upscale
+
+| Kiểu | Khi nào | Cách |
+|---|---|---|
+| `flat` | chữ, logo, mảng màu đều | Real-ESRGAN model anime: mép sắc, không quầng |
+| `detail` | ảnh chụp, tranh có gradient và texture mịn | Real-ESRGAN model x4plus: giữ chất liệu, hơi làm mượt |
+| `grain` | halftone, chấm bi, vệt bắn, hạt sờn | **Lanczos thường**, không cho model bịa chi tiết |
+
+Kiểu `grain` có vì một lý do cụ thể. Cả hai model Real-ESRGAN đều coi chấm bi halftone là nhiễu cần
+"sửa": model x4plus biến chấm thành vệt lông xù, model anime biến thành mảng nứt vỡ. Lanczos thường
+giữ chấm là chấm, chỉ mềm đi một chút. Nhận diện bằng cách đếm số mảnh mực rời nhỏ: trên 26 thiết
+kế thật, bốn poster halftone và hai tấm vệt bắn có 3,4 đến 21 mảnh nhỏ trên 1000 pixel mực, còn ảnh
+chụp và đồ họa phẳng dưới 0,9. Dòng log in `kiểu: grain`; ép tay bằng `--style grain` nếu nhận diện
+sai.
+
+Đổi lại, chấm bi qua Lanczos mềm hơn chấm bi bị model "sửa" thành khối: trên poster sọ halftone,
+mực đặc giảm từ 50% xuống 26% và phủ thấp tăng từ 16% lên 21%. Con số xấu hơn nhưng ảnh đúng hơn,
+vì phần "đặc" cũ là vệt lông xù model bịa ra. Với DTF, kết hợp `--dtf-safe` để chấm bi đủ to mà bám:
+cùng tấm đó, nét mảnh từ 8,5% về 0, đốm nhỏ từ 2,5% về 0,9%, phủ thấp về lại 16%.
 
 ## Các tùy chọn
 
@@ -194,7 +217,9 @@ Nâng cao, thường không cần:
 
 | Cờ | Mặc định | Khi nào dùng |
 |---|---|---|
-| `--style X` | auto | Ép model upscale: `flat` hoặc `detail`. |
+| `--style X` | auto | Ép cách upscale: `flat` (model anime), `detail` (model x4plus), `grain` (Lanczos, cho halftone và vệt bắn). Xem mục **Ba cách upscale**. |
+| `--dtf-safe` | tắt | Nới mọi nét và đốm mảnh hơn 0,5 mm ra đúng 0,5 mm bằng chính màu của nó, để in DTF không bong. Tên file thêm `_dtf-safe`. |
+| `--icc FILE` | hồ sơ chung của macOS | Hồ sơ CMYK của xưởng in, dùng để đo màu ngoài gamut và xem như in. |
 | `--colors N` | không gom | Gom về N màu (raster) hoặc đổi số màu khi `--vector` (mặc định 12). |
 | `--merge D` | 12 | Ngưỡng gộp hai màu gần nhau khi gom (CIELAB ΔE). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác bị gộp. |
 | `--dtf-warn P` | 5 | Cảnh báo khi quá P phần trăm diện tích mực nằm dưới 40% độ phủ, mức mà in DTF dễ bong. `100` = tắt. |
@@ -412,6 +437,38 @@ CẢNH BÁO ảnh gốc nhỏ: 1024x1024 px phải phóng 4,4 lần cho khung n�
 
 Với ảnh AI 1024 px in khổ mặc định thì mức 4,4 là thường gặp và vẫn in tốt; con số này đáng lo khi
 lên 6 đến 8 lần, ví dụ ảnh 512 px hoặc ảnh đã cắt nhỏ.
+
+## Nét mảnh và đốm nhỏ: `--dtf-safe`
+
+DTF bám kém ở hai chỗ: nét mảnh hơn khoảng 0,5 mm và đốm rời nhỏ hơn khoảng 1 mm². Bột keo không
+đủ diện tích để giữ, nên chúng bong hoặc rơi ngay trên bàn ép. Pipeline đo hai phần trăm đó trên
+từng file in (cột `nét mảnh` và `đốm nhỏ`) và báo trong kết luận khi vượt 5% và 1%. Trên bộ 26
+thiết kế, ba poster halftone có 8 đến 16% mực trong nét mảnh, phần còn lại dưới 3%.
+
+`--dtf-safe` nới **chỉ** những nét và đốm mảnh hơn 0,5 mm ra đúng 0,5 mm, bằng chính màu của pixel
+mực gần nhất. Mảng khối và mép của nó không đổi một pixel. Đây là "nét tối thiểu" thợ in lụa vẫn làm
+tay: mất một chút chi tiết ở halftone, đổi lấy áo không bong sau khi giặt. Tên file thêm
+`_dtf-safe` để bản gốc và bản nới không đè lên nhau; chạy `--audit` để so hai bản.
+
+## Màu in được và màu không
+
+Ảnh AI hay dùng hồng neon, đỏ tươi, xanh lá chói, là những màu **màn hình hiện được nhưng mực CMYK
+không pha ra được**. In ra chúng xỉn đi rõ, và khách so với ảnh duyệt trên điện thoại sẽ thấy khác.
+
+Pipeline đưa màu từng pixel mực qua một hồ sơ CMYK rồi về lại, đo lệch bao nhiêu. Cột `ngoài gamut`
+là phần trăm mực lệch quá 25 ΔE, mức xỉn hẳn, kèm mức lệch lớn nhất. Trên trang, bật **xem như in**
+để thấy toàn bộ file với màu đã qua hồ sơ, đặt cạnh ảnh gốc.
+
+Ngưỡng 25 cố ý cao. Với hồ sơ chung của macOS, đỏ logo `(215, 8, 22)`, hồng neon `(255, 40, 130)`
+và xanh Bills đều lệch 19 đến 20 ΔE, tức hồ sơ đó không phân biệt được "đỏ in được" với "hồng khó
+in", vì nó hẹp hơn mực DTF thật. Nên chỉ những màu không mực nào pha ra mới bị đếm: xanh lá chói
+lệch 75, xanh dương thuần 98, tím 60, đỏ 255 là 34. Mức lệch lớn nhất vẫn được báo để bạn biết màu
+chủ đạo sẽ xỉn bao nhiêu, và **xem như in** cho thấy điều đó bằng mắt.
+
+Hồ sơ đúng nhất là **ICC của chính xưởng in** cho bộ mực và loại film họ dùng; xin họ một file rồi
+chạy `./run.sh --icc xuong.icc` (cả với `--ui`). Không có thì pipeline dùng hồ sơ CMYK chung của
+macOS, là mức bi quan: mực DTF thật thường rộng hơn một chút. Máy không có hồ sơ nào thì cột này
+hiện `—`.
 
 ## Lưu ý về file in cho áo tối
 

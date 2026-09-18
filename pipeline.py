@@ -966,7 +966,7 @@ def clean_print(img: Image.Image, dpi: int = DPI, faint: int = 8,
 
 
 META_KEY = "tshirt-pipeline"  # tên đoạn tEXt trong file PNG ghi lại cách file được tạo
-RUN_ONLY = {"files", "keep_input", "ui", "audit"}  # cờ điều khiển một lần chạy, không nói gì về file
+RUN_ONLY = {"files", "keep_input", "ui", "audit", "icc"}  # cờ của một lần chạy, không nói gì về file
 
 
 def flags_used(args: argparse.Namespace) -> dict:
@@ -993,6 +993,74 @@ def read_meta(path: Path) -> dict | None:
     im.load()
     raw = getattr(im, "text", {}).get(META_KEY)
     return json.loads(raw) if raw else None
+
+
+# Hồ sơ CMYK để đoán màu in: của xưởng nếu có (--icc), không thì hồ sơ chung của macOS, mức bi quan
+CMYK_CANDIDATES = (Path("/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc"),)
+CMYK_PROFILE: Path | None = next((c for c in CMYK_CANDIDATES if c.exists()), None)
+# Một màu lệch quá ngần này ΔE sau khi qua CMYK là "ngoài gamut". 25 là mức xỉn hẳn: xanh lá neon
+# (75), xanh dương thuần (98), tím (60), đỏ 255 (34) đều vượt; đỏ logo, hồng neon, xanh Bills lệch
+# 19-20 với hồ sơ chung của macOS và chưa tính, vì hồ sơ đó hẹp hơn mực DTF thật. Muốn khắt khe hơn
+# thì đưa hồ sơ của xưởng vào bằng --icc.
+GAMUT_DE = 25.0
+GAMUT_WARN = 30.0  # cảnh báo khi quá ngần này phần trăm mực nằm ngoài gamut
+_PROOF_LOCK = threading.Lock()
+_PROOF: dict[str, tuple] = {}
+
+
+def _proof_transforms(icc: Path):
+    """sRGB -> CMYK -> sRGB, dựng một lần cho mỗi hồ sơ."""
+    from PIL import ImageCms  # noqa: PLC0415 - heavy import kept local
+
+    key = str(icc)
+    with _PROOF_LOCK:
+        if key not in _PROOF:
+            srgb = ImageCms.createProfile("sRGB")
+            cmyk = ImageCms.getOpenProfile(key)
+            intent = ImageCms.Intent.RELATIVE_COLORIMETRIC
+            _PROOF[key] = (ImageCms.buildTransform(srgb, cmyk, "RGB", "CMYK", renderingIntent=intent),
+                           ImageCms.buildTransform(cmyk, srgb, "CMYK", "RGB", renderingIntent=intent))
+        return _PROOF[key]
+
+
+def _through_cmyk(rgb: Image.Image, icc: Path) -> Image.Image:
+    from PIL import ImageCms  # noqa: PLC0415 - heavy import kept local
+
+    to_cmyk, back = _proof_transforms(icc)
+    return ImageCms.applyTransform(ImageCms.applyTransform(rgb, to_cmyk), back)
+
+
+def soft_proof(img: Image.Image, icc: Path | None = None) -> Image.Image:
+    """Ảnh như máy in CMYK sẽ ra: màu đi qua hồ sơ CMYK rồi về sRGB, alpha giữ nguyên.
+
+    Hồng neon, xanh lá chói, đỏ tươi của ảnh AI nằm ngoài gamut mực nên xỉn đi; đây là cách nhìn
+    thấy điều đó trước khi in. Hồ sơ đúng nhất là của chính xưởng; không có thì hồ sơ chung của
+    macOS cho mức bi quan."""
+    icc = icc or CMYK_PROFILE
+    rgba = img.convert("RGBA")
+    if icc is None:
+        return rgba
+    rgb = _through_cmyk(rgba.convert("RGB"), icc)
+    rgb.putalpha(rgba.getchannel("A"))
+    return rgb
+
+
+def gamut_clip(img: Image.Image, icc: Path | None = None, sample: int = 200_000) -> dict | None:
+    """Phần trăm mực nằm ngoài gamut CMYK (lệch quá GAMUT_DE sau khi qua hồ sơ) và mức lệch lớn
+    nhất. None khi không có hồ sơ nào để đoán. Đo trên tối đa `sample` pixel mực đục."""
+    icc = icc or CMYK_PROFILE
+    if icc is None:
+        return None
+    a = np.asarray(img.convert("RGBA"))
+    idx = np.flatnonzero(a[:, :, 3] > 128)
+    if not idx.size:
+        return {"gamut": 0.0, "de_max": 0.0}
+    if idx.size > sample:
+        idx = np.random.default_rng(0).choice(idx, sample, replace=False)
+    rgb = a[:, :, :3].reshape(-1, 3)[idx]
+    back = np.asarray(_through_cmyk(Image.fromarray(rgb.reshape(-1, 1, 3), "RGB"), icc)).reshape(-1, 3)
+    de = np.linalg.norm(_rgb_to_lab(rgb) - _rgb_to_lab(back), axis=1)
+    return {"gamut": round(100.0 * float((de > GAMUT_DE).mean()), 1), "de_max": round(float(de.max()), 1)}
 
 
 MIN_FEATURE_MM = 0.5  # nét mảnh hơn mức này bám keo DTF kém và bong sau vài lần giặt
@@ -1106,6 +1174,8 @@ def measure_print(out: Path, src: Path) -> dict:
     sau vài lần giặt; in DTG có lót trắng thì không sao.
     `manh`, `dom`: phần trăm mực trong nét mảnh hơn 0,5 mm và trong đốm rời nhỏ hơn 1 mm², hai
     thứ DTF hay bong; xem fine_ink.
+    `gamut`, `de_max`: phần trăm mực ngoài gamut CMYK và mức lệch lớn nhất; None khi máy không có
+    hồ sơ CMYK nào. Xem gamut_clip.
     `thua`: phần trăm mực đục nhưng trùng màu áo, tức chỗ máy phủ lót trắng rồi in đè lên vải.
     `sai_so`: ghép file lên màu áo rồi so với ảnh gốc, theo mức trên 255.
 
@@ -1118,12 +1188,13 @@ def measure_print(out: Path, src: Path) -> dict:
     alpha = o[:, :, 3]
     ink = alpha > 0
     if not ink.any():
-        return {"dac": 0.0, "phu_thap": 0.0, "manh": 0.0, "dom": 0.0, "thua": 0.0, "sai_so": None,
-                "shirt": "#808080"}
+        return {"dac": 0.0, "phu_thap": 0.0, "manh": 0.0, "dom": 0.0, "gamut": None, "de_max": None,
+                "thua": 0.0, "sai_so": None, "shirt": "#808080"}
     rep = {
         "dac": round(100 * float((alpha[ink] > 250).mean()), 1),
         "phu_thap": round(100 * float((alpha[ink] < DTF_COVERAGE).mean()), 1),
         **fine_ink(Image.fromarray(o.astype(np.uint8), "RGBA")),
+        **(gamut_clip(Image.fromarray(o.astype(np.uint8), "RGBA")) or {"gamut": None, "de_max": None}),
     }
     meta = read_meta(out) or {}
     if meta.get("mode") in ("ai", "none"):
@@ -1295,6 +1366,9 @@ def print_verdict(report: dict, dtf_warn: float = DTF_WARN) -> dict:
     if report.get("dom", 0) > SPECK_WARN:
         soft.append(f"{report['dom']:.1f}% mực là đốm rời nhỏ hơn {SPECK_MM2:g} mm², dễ rơi khỏi bàn ép. "
                     f"--dtf-safe nới đốm ra, hoặc chấp nhận mất vài đốm")
+    if (report.get("gamut") or 0) > GAMUT_WARN:
+        soft.append(f"{report['gamut']:.0f}% mực nằm ngoài gamut mực CMYK, lệch tới {report['de_max']:.0f} ΔE: "
+                    f"in ra xỉn hẳn so với màn hình. Bật 'xem như in' trên trang để thấy trước, hoặc đổi màu")
     if report["dac"] < 50:
         soft.append("mực mỏng, đúng với poster halftone nhưng đáng ngờ với đồ họa phẳng")
     muc = "hong" if hard else ("xem" if soft else "dat")
@@ -1330,11 +1404,11 @@ def audit(sources: list[Path]) -> int:
         known = [v for v in vals if v is not None]
         return f"{sum(known) / len(known):.2f}" if known else "—"
 
-    print(f"{'đặc%':>6s} {'phủ thấp%':>10s} {'mảnh%':>6s} {'đốm%':>5s} {'thừa%':>7s} {'sai số':>7s}  file")
+    print(f"{'đặc%':>6s} {'phủ thấp%':>10s} {'mảnh%':>6s} {'đốm%':>5s} {'gamut%':>7s} {'thừa%':>7s} {'sai số':>7s}  file")
     for r in rows:
         mark = {"dat": "", "xem": "  <-- xem lại", "hong": "  <-- KHÔNG DÙNG ĐƯỢC"}[r["muc"]]
         print(f"{r['dac']:6.1f} {r['phu_thap']:10.1f} {r.get('manh', 0):6.1f} {r.get('dom', 0):5.1f} "
-              f"{num(r['thua'], 7, 2)} {num(r['sai_so'], 7, 2)}  {r['name'][:40]}{mark}")
+              f"{num(r.get('gamut'), 7, 1)} {num(r['thua'], 7, 2)} {num(r['sai_so'], 7, 2)}  {r['name'][:36]}{mark}")
     d = [r["dac"] for r in rows]
     print(f"\n{len(rows)} file | mực đặc tb {sum(d)/len(d):.1f}% | mực thừa tb {mean([r['thua'] for r in rows])}% | "
           f"sai số tb {mean([r['sai_so'] for r in rows])}  (— = không đo được, áo khác màu nền)")
@@ -1407,6 +1481,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--dtf-warn", type=float, default=DTF_WARN,
                    help=f"cảnh báo khi quá ngần này phần trăm diện tích mực nằm dưới 40%% độ phủ, mức mà in DTF "
                         f"dễ bong. Mặc định {DTF_WARN:g}. 100 = tắt cảnh báo")
+    p.add_argument("--icc", default=None,
+                   help="hồ sơ màu CMYK (.icc) của xưởng in, dùng để đo màu ngoài gamut và xem như in. "
+                        f"Mặc định: {'hồ sơ chung của macOS' if CMYK_PROFILE else 'không có, bỏ qua phép đo'}")
     p.add_argument("--dtf-safe", action="store_true",
                    help=f"nới mọi nét và đốm mảnh hơn {MIN_FEATURE_MM:g} mm ra đúng {MIN_FEATURE_MM:g} mm bằng chính màu của nó, "
                         "để in DTF không bong. Mất một chút chi tiết ở halftone và vệt bắn. Tên file thêm _dtf-safe")
@@ -1427,7 +1504,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    global CMYK_PROFILE
     args = parse_args(argv)
+    if args.icc:
+        icc = Path(args.icc)
+        if not icc.is_file():
+            print(f"Không tìm thấy hồ sơ màu {icc}")
+            return 1
+        CMYK_PROFILE = icc
     if args.ui:
         import ui  # noqa: PLC0415 - chỉ nạp khi cần, để chạy dòng lệnh không phải nạp thêm gì
 

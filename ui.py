@@ -144,6 +144,16 @@ def source_path(name: str) -> Path:
     raise FileNotFoundError(name)
 
 
+def proof_preview(path: Path) -> Path:
+    """Bản xem như in: bản thu nhỏ đi qua hồ sơ CMYK. Dựng từ bản thu nhỏ để không đổi màu 20 MB."""
+    small = preview(path, PREVIEW_PX, "out")
+    dest = CACHE / f"proof-{PREVIEW_PX}-{path.stem}.png"
+    if dest.exists() and dest.stat().st_mtime >= small.stat().st_mtime:
+        return dest
+    pipeline.soft_proof(Image.open(small)).save(dest, "PNG")
+    return dest
+
+
 def preview(path: Path, box: int, tag: str) -> Path:
     """Bản thu nhỏ để hiện trên trang, dựng một lần rồi dùng lại cho tới khi file gốc đổi."""
     CACHE.mkdir(parents=True, exist_ok=True)
@@ -264,6 +274,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._file(preview(source_path(parts[1]), THUMB_PX, "src"))
             elif parts[0] == "out" and len(parts) == 2:
                 self._file(preview(pick_output(parts[1], wanted), PREVIEW_PX, "out"))
+            elif parts[0] == "proof" and len(parts) == 2:
+                self._file(proof_preview(pick_output(parts[1], wanted)))
             elif parts[0] == "file" and len(parts) == 2:
                 out = pick_output(parts[1], wanted)
                 body = out.read_bytes()

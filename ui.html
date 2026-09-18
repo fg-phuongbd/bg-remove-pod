@@ -139,6 +139,7 @@
     <button id="auditbtn" class="ghost">Chấm cả lô</button>
     <label id="variantbox" hidden>bản in <select id="variant" title="ảnh này có nhiều file in, chọn bản muốn xem"></select></label>
     <a class="dl" id="dl" hidden download>Tải file in</a>
+    <label title="màu đi qua hồ sơ CMYK để thấy trước màu in xỉn đi bao nhiêu"><input type="checkbox" id="proof"> xem như in</label>
     <label>nền xem
       <select id="bgpick">
         <option value="shirt">màu áo</option>
@@ -309,7 +310,8 @@ async function select(name, variant) {
   $("#srcview").innerHTML = `<img src="/src/${encodeURIComponent(name)}" alt="">`;
   $("#dl").hidden = true;
   const out = $("#outview");
-  out.innerHTML = `<img src="/out/${encodeURIComponent(name)}${q}${q ? "&" : "?"}t=${Date.now()}" alt=""
+  const route = $("#proof").checked ? "proof" : "out";   // xem như in: bản đã qua hồ sơ CMYK
+  out.innerHTML = `<img src="/${route}/${encodeURIComponent(name)}${q}${q ? "&" : "?"}t=${Date.now()}" alt=""
                         onerror="this.replaceWith(Object.assign(document.createElement('div'),
                         {className:'empty', textContent:'Chưa có file in. Bấm Chạy.'}))">`;
   state.report = null;
@@ -330,6 +332,7 @@ async function select(name, variant) {
   paintBg();
 }
 $("#variant").onchange = () => { if (state.pick) select(state.pick, $("#variant").value); };
+$("#proof").onchange = () => { if (state.pick) select(state.pick, state.variant); };
 
 function showNums(r) {
   const v = r.muc ? `<div class="verdict ${r.muc}">
@@ -346,6 +349,7 @@ function showNums(r) {
     <div title="dưới 40% độ phủ: in DTF dễ bong">phủ thấp<b${r.phu_thap > 5 ? ' style="color:#ffd479"' : ''}>${r.phu_thap}%</b></div>
     <div title="mực trong nét mảnh hơn 0,5 mm: in DTF dễ bong, thử 'nới nét DTF'">nét mảnh<b${r.manh > 5 ? ' style="color:#ffd479"' : ''}>${r.manh ?? "—"}%</b></div>
     <div title="mực là đốm rời nhỏ hơn 1 mm²: dễ rơi khỏi bàn ép">đốm nhỏ<b${r.dom > 1 ? ' style="color:#ffd479"' : ''}>${r.dom ?? "—"}%</b></div>
+    <div title="${r.gamut == null ? "máy không có hồ sơ CMYK" : `mực lệch quá 10 ΔE sau khi qua hồ sơ CMYK, lệch lớn nhất ${r.de_max} ΔE. Bật 'xem như in' để thấy`}">ngoài gamut<b${r.gamut > 30 ? ' style="color:#ffd479"' : ''}>${r.gamut == null ? "—" : r.gamut + "%"}</b></div>
     <div title="${r.sai_so == null ? "không đo được: file cắt hình hoặc một màu mực" : ""}">sai số khi in<b>${r.sai_so ?? "—"}</b></div>
     <div>màu áo<b style="font-size:13px">${r.shirt || "khác màu nền, chọn ở ô nền xem"}</b></div>
     <div>tên file<b style="font-size:12px">${esc(r.out || "—")}</b></div>
@@ -413,12 +417,12 @@ $("#auditbtn").onclick = async () => {
     const avg = k => { const v = rows.map(r => r[k]).filter(x => x != null);
                        return v.length ? (v.reduce((s, x) => s + x, 0) / v.length).toFixed(2) : "—"; };
     $("#audit").innerHTML = rows.length ? `<table>
-      <tr><th>đặc %</th><th title="dưới 40% độ phủ: in DTF dễ bong">phủ thấp %</th><th title="nét mảnh hơn 0,5 mm">mảnh %</th><th>thừa %</th><th>sai số</th><th>file</th></tr>
+      <tr><th>đặc %</th><th title="dưới 40% độ phủ: in DTF dễ bong">phủ thấp %</th><th title="nét mảnh hơn 0,5 mm">mảnh %</th><th title="ngoài gamut CMYK">gamut %</th><th>thừa %</th><th>sai số</th><th>file</th></tr>
       ${rows.map(r => `<tr class="${r.why.length ? "warn" : ""}">
-        <td>${r.dac}</td><td>${r.phu_thap}</td><td>${r.manh ?? "—"}</td><td>${r.thua ?? "—"}</td><td>${r.sai_so ?? "—"}</td>
+        <td>${r.dac}</td><td>${r.phu_thap}</td><td>${r.manh ?? "—"}</td><td>${r.gamut ?? "—"}</td><td>${r.thua ?? "—"}</td><td>${r.sai_so ?? "—"}</td>
         <td>${esc(r.name)}${r.why.length ? `<div class="why">${r.why.map(esc).join("<br>")}</div>` : ""}</td>
       </tr>`).join("")}
-      <tr><td>${avg("dac")}</td><td>${avg("phu_thap")}</td><td>${avg("manh")}</td><td>${avg("thua")}</td><td>${avg("sai_so")}</td>
+      <tr><td>${avg("dac")}</td><td>${avg("phu_thap")}</td><td>${avg("manh")}</td><td>${avg("gamut")}</td><td>${avg("thua")}</td><td>${avg("sai_so")}</td>
           <td>trung bình của ${rows.length} file</td></tr></table>`
       : '<div class="empty">Chưa có file in nào để chấm.</div>';
   } catch (e) { $("#msg").textContent = e.message; }

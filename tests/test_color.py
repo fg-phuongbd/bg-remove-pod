@@ -118,13 +118,16 @@ def test_gamut_clip_flags_neon_but_not_neutral():
 
     if pipeline.CMYK_PROFILE is None:
         pytest.skip("không có hồ sơ CMYK trên máy này")
-    neon = Image.new("RGBA", (20, 20), (255, 40, 130, 255))
+    neon = Image.new("RGBA", (20, 20), (57, 255, 20, 255))      # xanh lá chói: không mực nào pha ra
     grey = Image.new("RGBA", (20, 20), (128, 128, 128, 255))
     half = Image.new("RGBA", (20, 20), (128, 128, 128, 255))
-    half.paste(neon, (0, 0, 20, 10))
-    assert pipeline.gamut_clip(neon)["gamut"] > 90 and pipeline.gamut_clip(neon)["de_max"] > 10
+    half.paste(neon.crop((0, 0, 20, 10)), (0, 0))
+    assert pipeline.gamut_clip(neon)["gamut"] > 90 and pipeline.gamut_clip(neon)["de_max"] > 25
     assert pipeline.gamut_clip(grey)["gamut"] < 5
     assert 40 < pipeline.gamut_clip(half)["gamut"] < 60
+    # đỏ logo lệch vừa với hồ sơ chung: không bị đếm là ngoài gamut, nhưng mức lệch vẫn được báo
+    red = pipeline.gamut_clip(Image.new("RGBA", (20, 20), (215, 8, 22, 255)))
+    assert red["gamut"] < 5 and red["de_max"] > 10
     assert pipeline.gamut_clip(Image.new("RGBA", (4, 4), (0, 0, 0, 0))) == {"gamut": 0.0, "de_max": 0.0}
 
 

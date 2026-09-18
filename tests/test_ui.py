@@ -235,7 +235,7 @@ def test_page_config_covers_every_flag_the_cli_has(server):
     """Trang phải có đủ cờ của dòng lệnh, và mặc định phải đọc từ chính parse_args."""
     cfg = json.loads(get(server, "/api/config")[1])
     names = {f["name"] for f in cfg["flags"]}
-    cli = set(vars(pipeline.parse_args([]))) - {"files", "keep_input", "ui", "audit"}
+    cli = set(vars(pipeline.parse_args([]))) - pipeline.RUN_ONLY      # cờ của một lần chạy, không của ảnh
     assert names == cli, f"lệch: {cli ^ names}"
     by = {f["name"]: f for f in cfg["flags"]}
     assert by["size"]["default"] == pipeline.parse_args([]).size
