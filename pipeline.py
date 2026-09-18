@@ -1264,6 +1264,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     kind = detect_bg(original)
     bg, refine = choose_mode(args, kind)
     filled_in = False  # --fill-holes có thực sự được áp dụng không, để dòng log nói đúng
+    style_src = None  # bức ảnh dùng để chọn kiểu upscale: bản key TRƯỚC khi tô đặc, xem bên dưới
     if bg == "none":
         cut = crop_to_content(original)
         shirt = None
@@ -1283,6 +1284,10 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         if args.bg == "auto":
             bg = key_style(bg, is_flat_art(original))  # flat art: distance, not brightness
         keyed = key_bg(original, bg, args.floor)
+        # Kiểu upscale đo trên bản key thuần: tô đặc biến thân người thành một khối, còn sàn tô đặc
+        # để lại nhiều mảnh nhỏ, và cả hai đều làm phép đếm hạt đổi kết quả. Cùng một ảnh phải ra
+        # cùng kiểu dù bật cờ gì.
+        style_src = crop_to_content(keyed, min_alpha=40) if silhouette else None
         if silhouette:
             filled = solid_core(keyed, original, silhouette, bg_rgb(original, bg), floor=args.fill_floor)
             # Trên một tấm poster, model cắt hình coi cả tấm là một khối và lấp luôn nền giữa các
@@ -1301,7 +1306,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         shirt = {"black": (20, 20, 22), "white": (245, 245, 245)}.get(kind) or bg_color(original)
     cut.save(WORK_DIR / f"{src.stem}-cut.png")
 
-    style = detect_style(cut) if args.style == "auto" else args.style
+    style = detect_style(style_src or cut) if args.style == "auto" else args.style
     colors = args.colors if args.colors is not None else (12 if args.vector else 0)
     model = UPSCALE_MODEL[style]
 

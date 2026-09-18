@@ -578,3 +578,31 @@ def test_fill_guard_measures_the_print_resolution_image(dirs, monkeypatch, capsy
     assert not (dirs / "output" / "toi_240x240_center_fill.png").exists()
     rep = pipeline.measure_print(dirs / "output" / "toi_240x240_center.png", src)
     assert rep["thua"] < 20
+
+
+def test_upscale_style_does_not_depend_on_fill_holes(dirs, monkeypatch, capsys):
+    """Cùng một ảnh phải ra cùng kiểu upscale dù có tô đặc hay không: kiểu đo trên bức ảnh,
+    không đo trên việc thân hình đã được lấp hay chưa. Trên ảnh thật, một tấm đổi từ flat sang
+    grain chỉ vì bật cờ, và bản tô đặc bị mềm đi vì đi đường Lanczos."""
+    from PIL import ImageDraw
+    rng = np.random.default_rng(1)
+    a = np.zeros((240, 240, 3), np.uint8)
+    body = rng.random((120, 120)) < 0.5                                 # thân người: xám tối lẫn gần đen, hạt nhiễu
+    a[30:150, 60:180] = np.where(body[:, :, None], (40, 40, 40), (12, 12, 12))
+    a[30:60, 60:180] = (230, 230, 230)                                 # vai áo trắng: chắc chắn là mực đặc
+    im = Image.fromarray(a, "RGB")
+    src = dirs / "input" / "nguoi.png"
+    im.save(src)
+    sil = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    ImageDraw.Draw(sil).rectangle((58, 28, 182, 152), fill=(255, 255, 255, 255))
+    monkeypatch.setattr(pipeline, "remove_bg", lambda img: sil)
+
+    def style_of(flags):
+        assert pipeline.main(["--size", "240x240", "--keep-input", "--bg", "black", "--fill-limit", "100",
+                              *flags, str(src)]) == 0
+        line = [l for l in capsys.readouterr().out.splitlines() if "kiểu:" in l][0]
+        return line.split("kiểu:")[1].split("|")[0].strip()
+
+    styles = {"không cờ": style_of([]), "tô đặc": style_of(["--fill-holes"]),
+              "sàn 32": style_of(["--fill-holes", "--fill-floor", "32"])}
+    assert len(set(styles.values())) == 1, f"kiểu đổi theo cờ: {styles}"

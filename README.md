@@ -285,7 +285,21 @@ thì mặt và cánh tay in mỏng.
 
 `--fill-floor D` là điểm giữa: chỗ ảnh gốc cách màu nền dưới D không tô đặc mà để áo làm màu đó,
 chỗ sáng hơn nền rõ vẫn tô. Mặc định 0 giữ hành vi cũ, tô cả thân hình. Với ảnh đen trắng thử `32`,
-cùng mức với `--floor` của bước key. Xem bảng so sánh trên ảnh thật ở cuối mục này để chọn.
+cùng mức với `--floor` của bước key.
+
+Đo trên bốn ảnh có người thật, nền đen, cùng một ngày. `mờ` là phần trăm pixel mực bán trong suốt,
+tức chỗ in mỏng; `trùng áo` là mực đục cùng màu vải.
+
+| Ảnh | không cờ: mờ | tô đặc: mờ / trùng áo | sàn 32: mờ / trùng áo |
+|---|---|---|---|
+| ảnh đen trắng (Bonix) | 18,4% | chốt chặn bỏ qua (thêm 33%) | 9,1% / 0,1% |
+| áo trắng, tóc đen (Romo) | 31,6% | 0,7% / 9,7% | 3,1% / 0% |
+| áo xanh, mũ trắng (Bills) | 32,0% | 0,6% / 11,3% | 5,6% / 0% |
+| nét cọ và vệt bắn (Allen) | 32,1% | 20,0% / 3,8% | 22,6% / 0% |
+
+Sàn 32 đưa mực trùng áo về 0 trên cả bốn tấm và vẫn tô đặc mặt, da, áo; cái giá là tóc đen và bóng
+sâu trở về alpha của bước key, nên `mờ` cao hơn bản tô đặc vài phần trăm. Trên áo đen, mắt không
+thấy khác; trên máy in, bản có sàn không có khối mực đen trên vải đen.
 
 ## Hai kiểu key, pipeline tự chọn
 
