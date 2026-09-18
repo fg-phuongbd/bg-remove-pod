@@ -28,10 +28,12 @@ về `~/.rembg/models/`.
    | Poster vẽ tay, có glow hoặc halftone | `./run.sh` |
    | Ảnh chụp người hoặc nhân vật | `./run.sh --fill-holes` |
    | Ảnh chụp người kèm chữ đồ họa | `./run.sh --fill-holes` |
-   | Bản in nhỏ đặt ở một góc | `./run.sh --place top-right --scale 26` |
+   | Logo ngực trái | `./run.sh --preset chest-left` |
+   | Bản in nhỏ ở vị trí khác | `./run.sh --place top-right --scale 26` |
 
-   Ngoài `--fill-holes` và `--place`, pipeline tự quyết phần còn lại: nhận diện nền, chọn kiểu key,
-   chọn model upscale. Dòng log in ra nó đã chọn gì.
+   Ngoài `--fill-holes` và vị trí in, pipeline tự quyết phần còn lại: nhận diện nền, chọn kiểu key,
+   chọn model upscale. Dòng log in ra nó đã chọn gì, và mỗi file in **ghi lại bộ cờ đã dùng** trong
+   chính nó, xem mục **File in nhớ cách nó được tạo**.
 
 3. Lấy kết quả:
 
@@ -80,10 +82,11 @@ và in ra dòng log cho biết nó chọn gì.
 | Poster vẽ tay, có glow hoặc halftone | để nguyên mặc định |
 | Ảnh chụp người hoặc nhân vật | bật `thân hình đặc` |
 | Ảnh chụp người kèm chữ đồ họa | bật `thân hình đặc` |
-| Bản in nhỏ đặt ở một góc | `đặt` = top-right, `cỡ` = 26 |
+| Logo ngực trái | `mẫu vị trí` = chest-left |
+| Bản in nhỏ ở vị trí khác | `đặt` = top-right, `cỡ` = 26 |
 | In một màu mực | `mực` = đen hoặc trắng |
 
-Tám cờ hay dùng nằm trên thanh trên cùng, sáu cờ còn lại trong khối `cờ nâng cao`. Danh sách và giá
+Chín cờ hay dùng nằm trên thanh trên cùng, tám cờ còn lại trong khối `cờ nâng cao`. Danh sách và giá
 trị mặc định lấy thẳng từ `parse_args`, nên thêm cờ mới vào dòng lệnh là trang có ngay.
 
 **4. Chạy.** *Chạy ảnh đang chọn* làm một ảnh, *Chạy tất cả đang chờ* làm hết những ảnh chưa xử lý,
@@ -91,7 +94,11 @@ mỗi ảnh dùng cờ riêng của nó. Ô `cùng lúc` đặt số ảnh chạ
 hơn rõ, cao hơn nữa thì máy đuối vì mỗi ảnh giữ vài mảng cỡ 5000 x 5000 trong bộ nhớ. Mỗi ảnh mất
 khoảng 14 giây, hoặc 45 giây nếu bật `thân hình đặc` vì phải chạy thêm model cắt hình.
 
-**5. Đọc kết luận.** Ô màu trả lời thẳng, bốn con số bên cạnh là dẫn chứng.
+**5. Đọc kết luận.** Ô màu trả lời thẳng, bốn con số bên cạnh là dẫn chứng. Dưới các con số là
+`cách` pipeline đã chọn và `cờ đã dùng`, một dòng lệnh dán lại vào terminal là ra đúng file này.
+
+Một ảnh gốc có nhiều file in (chạy `chest-left` rồi chạy `center`) thì ô **bản in** cạnh nút tải
+hiện ra để chọn bản muốn xem; không chọn thì là bản mới nhất, tức file vừa chạy xong.
 
 | Mức | Nghĩa |
 |---|---|
@@ -110,6 +117,10 @@ trang không bao giờ nói khác nhau.
 | mực trùng màu áo | mực đục nhưng cùng màu áo, tức chỗ máy phủ lót trắng rồi in đè lên vải | Dưới 5% thì bỏ qua. Trên 20% gần như chắc là bật `thân hình đặc` nhầm cho poster. |
 | phủ thấp | mực nằm dưới 40% độ phủ | Cột quan trọng nhất với **in DTF**: vùng đó nhận ít bột keo nên dễ bong. Trên 5% thì in thử một chiếc, giặt vài lần rồi hãy chạy số lượng. In DTG có lót trắng thì không sao. |
 | sai số khi in | ghép file lên màu áo rồi so với ảnh gốc, thang 0 đến 255 | Dưới 1 là mắt không thấy. Trên 5 thì mở ảnh so sánh trong `review/` xem bằng mắt. |
+
+Hai cột sau chỉ có nghĩa khi áo là màu nền ảnh gốc. File cắt hình (`áo` = other) in lên áo khác màu
+mà trang không biết là màu gì, nên hai cột đó hiện `—` thay cho một con số so nhầm áo; chọn màu áo ở
+ô **nền xem** để chấm bằng mắt. File một màu mực cố ý khác ảnh gốc, nên riêng "sai số" là `—`.
 
 Nút **Chấm cả lô** hiện bảng này cho mọi file in một lượt, tô vàng những file cần xem lại kèm lý do.
 Bấm lần nữa để đóng. Ngoài dòng lệnh: `./run.sh --audit`.
@@ -175,6 +186,7 @@ Hằng ngày chỉ cần ba cờ:
 |---|---|---|
 | `--shirt X` | same | `same` = áo cùng màu nền ảnh, `other` = áo khác màu, `auto` = nền đen coi là áo đen, còn lại áo khác màu. Xem bảng trên. |
 | `--size WxH` | 4500x5100 | Kích thước file in. Số ≥ 200 là pixel, nhỏ hơn là cm (`30x40`). |
+| `--preset X` | none | Vị trí in hay dùng, điền sẵn `--place` và `--scale`: `chest-left`, `chest-right`, `chest`, `back-neck`, `full`. Xem mục **Đặt hình nhỏ trên khung in**. |
 | `--vector` | tắt | Minh họa phẳng: gom 12 màu rồi trace vector. Không dùng cho tranh có gradient, texture, chữ rất nhỏ. |
 | `file1 file2 …` | | Chỉ xử lý các file này. |
 
@@ -202,6 +214,7 @@ Ví dụ:
 ./run.sh --fill-holes                      # ảnh có nhân vật: giữ thân hình đặc, không đục lỗ
 ./run.sh --vector --fill-holes             # minh họa phẳng nền trắng, có chấm sáng trắng
 ./run.sh --size 30x40                      # khổ 30 x 40 cm
+./run.sh --preset chest-left               # logo ngực trái người mặc, 26% khung
 ```
 
 ## Nhân vật trên nền cùng màu áo: `--fill-holes`
@@ -287,6 +300,20 @@ rộng hộp đó còn hình dọc dùng hết chiều cao.
 `--margin` là khoảng hở từ mép khung, mặc định 2% cạnh ngắn, chỉ có tác dụng khi `--place` khác
 `center`. Hình căn giữa thì không bao giờ chạm tới nó.
 
+Các vị trí hay dùng có tên sẵn, `--preset` điền `--place` và `--scale` cho bạn. Tên theo **người
+mặc**: ngực trái của người mặc nằm bên **phải** file in.
+
+| Preset | Bằng | Dùng cho |
+|---|---|---|
+| `chest-left` | `--place top-right --scale 26` | logo ngực trái, khoảng 10 cm |
+| `chest-right` | `--place top-left --scale 26` | logo ngực phải |
+| `chest` | `--place top --scale 55` | ngực giữa, cỡ A4 |
+| `back-neck` | `--place top --scale 20` | nhãn nhỏ sau gáy |
+| `full` | `--place center --scale 100` | như mặc định |
+
+`--place` hoặc `--scale` đặt tay vẫn thắng preset, ví dụ `--preset chest-left --scale 30` cho logo
+ngực to hơn một chút. Tên file in mang vị trí và cỡ đã điền, không mang tên preset.
+
 ## In một màu: `--ink`
 
 ```bash
@@ -327,6 +354,19 @@ Cỡ và màu mực chỉ xuất hiện khi khác mặc định, để tên mặ
 cùng một ảnh ở cỡ hoặc vị trí khác sẽ ra file riêng chứ không đè lên nhau. Ảnh so sánh trong
 `review/` dùng đúng tên đó.
 
+## File in nhớ cách nó được tạo
+
+Mỗi file in ghi trong chính nó (một đoạn văn bản trong PNG, không ảnh hưởng gì đến việc in) bộ cờ
+khác mặc định, nền đã nhận diện, cách xử lý đã chọn, và một dòng lệnh chạy lại ra đúng file này:
+
+```
+./run.sh --size 240x240 --fill-holes --preset chest-left
+```
+
+Trang hiện dòng đó dưới các con số là `cờ đã dùng`, và dùng nó để biết file là bản key, bản cắt
+hình hay bản một màu mực rồi chấm cho đúng. File làm trước khi có mục này hiện `—` và được chấm như
+bản key, vì đó là cách chúng đã được tạo. Đọc bằng Python: `pipeline.read_meta(path)`.
+
 ## Chuẩn bị file cho xưởng in
 
 Mỗi file lưu ra đều được **dọn mực vô hình** và **gắn hồ sơ màu sRGB**.
@@ -359,6 +399,19 @@ khi vượt ngưỡng. Đổi ngưỡng bằng `--dtf-warn`, đặt `100` để 
 
 Đo trên một bộ 26 thiết kế: trung vị 0,9%, còn bốn tấm poster có halftone và quầng sáng rơi vào
 9,2 đến 15,7%. Ngưỡng 5 nằm giữa hai nhóm đó.
+
+## Cảnh báo ảnh gốc nhỏ
+
+Model upscale làm nét được 4 lần. Ảnh 1024 px lên khung 4500 px là 4,4 lần, phần dư là kéo giãn
+thường, viền mềm đi một chút. Pipeline in cảnh báo khi phải phóng quá 4 lần:
+
+```
+CẢNH BÁO ảnh gốc nhỏ: 1024x1024 px phải phóng 4,4 lần cho khung này, model chỉ làm nét được
+4 lần, phần dư là kéo giãn. Nếu thấy mờ, sinh lại ảnh ở kích thước lớn hơn.
+```
+
+Với ảnh AI 1024 px in khổ mặc định thì mức 4,4 là thường gặp và vẫn in tốt; con số này đáng lo khi
+lên 6 đến 8 lần, ví dụ ảnh 512 px hoặc ảnh đã cắt nhỏ.
 
 ## Lưu ý về file in cho áo tối
 
@@ -399,10 +452,16 @@ uv run pytest -m slow         # test tích hợp với model tách nền thật
 ## Cấu trúc
 
 ```
-pipeline.py     toàn bộ logic
+pipeline.py     toàn bộ logic xử lý và dòng lệnh
+ui.py           trang xem tại máy: server HTTP, hàng chạy, đo chất lượng cho từng ảnh
+ui.html         giao diện của trang, nạp vào bộ nhớ lúc chạy ./run.sh --ui
 run.sh          ./run.sh [cờ] [file...]
 setup.sh        cài một lần
 examples/       ảnh mẫu để thử
 tests/          pytest
 docs/superpowers/   spec và kế hoạch triển khai
 ```
+
+`output/` và `review/` không được dọn tự động và lớn nhanh (một file in 4500 x 5100 nặng 5 đến
+30 MB). Xóa tay khi đã gửi xưởng; chạy lại từ `input/done/` bất cứ lúc nào cũng ra lại đúng file,
+vì cờ đã ghi trong file in và trang nhớ cờ theo từng ảnh.

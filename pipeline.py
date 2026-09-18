@@ -1,7 +1,8 @@
-"""tshirt-pipeline: AI flat illustration -> print-ready transparent PNG (300 DPI).
+"""tshirt-pipeline: ảnh thiết kế AI -> file in PNG nền trong suốt, 300 DPI.
 
-Default mode traces the design to vector (vtracer) and re-renders it (resvg).
---raster mode upscales (Real-ESRGAN, Lanczos fallback) and flattens colors instead.
+Mặc định là raster: tách nền (key theo màu nền, hoặc cắt hình bằng model khi in lên áo khác
+màu), upscale 4 lần bằng Real-ESRGAN (Lanczos khi không có), đặt lên khung in. `--vector` gom
+màu rồi trace vector (vtracer) và vẽ lại (resvg) cho minh họa phẳng. Trang xem tại máy ở ui.py.
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ WORK_DIR = ROOT / "work"
 BIN_DIR = ROOT / "bin"
 REALESRGAN_BIN = BIN_DIR / "realesrgan-ncnn-vulkan"
 DPI = 300
+UPSCALE = 4  # Real-ESRGAN phóng 4 lần; xa hơn là Lanczos kéo giãn
 DEFAULT_SIZE = "4500x5100"  # px; Printful/Merch-style print file (38.1 x 43.2 cm at 300 DPI)
 REMBG_MODEL = "birefnet-general"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -1069,6 +1071,14 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     inner = art_box(box, args.scale)
     original = load_image(src)
     WORK_DIR.mkdir(parents=True, exist_ok=True)
+    # Model upscale được UPSCALE lần; xa hơn là Lanczos kéo giãn, và viền mềm đi. Đo trên cả
+    # ảnh gốc là mức thấp nhất: hình bị cắt về khung bao rồi mới phóng, nên thực tế còn phóng hơn.
+    grow = min(inner[0] / original.width, inner[1] / original.height)
+    if not args.vector and grow > UPSCALE:
+        times = f"{grow:.1f}".replace(".", ",")
+        print(f"  CẢNH BÁO ảnh gốc nhỏ: {original.width}x{original.height} px phải phóng {times} lần "
+              f"cho khung này, model chỉ làm nét được {UPSCALE} lần, phần dư là kéo giãn. "
+              f"Nếu thấy mờ, sinh lại ảnh ở kích thước lớn hơn.")
 
     kind = detect_bg(original)
     bg, refine = choose_mode(args, kind)

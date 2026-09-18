@@ -446,3 +446,15 @@ def test_preset_shows_in_the_file_name_and_is_remembered(dirs):
     out = dirs / "output" / "hinh_240x240_top-right_26pc.png"
     assert out.exists()
     assert pipeline.read_meta(out)["cmd"] == "./run.sh --size 240x240 --preset chest-left"
+
+
+def test_warns_when_the_source_is_too_small_for_the_print_size(dirs, capsys):
+    """Model upscale được 4 lần; ảnh 240 px lên khung 1200 px là 5 lần, phần dư là kéo giãn."""
+    src = dirs / "input" / "nho.png"
+    _poster_on_black(src)
+    assert pipeline.main(["--size", "1200x1200", "--keep-input", str(src)]) == 0
+    log = capsys.readouterr().out
+    assert "CẢNH BÁO ảnh gốc nhỏ" in log and "5,0 lần" in log
+
+    assert pipeline.main(["--size", "240x240", "--keep-input", str(src)]) == 0
+    assert "CẢNH BÁO ảnh gốc nhỏ" not in capsys.readouterr().out
