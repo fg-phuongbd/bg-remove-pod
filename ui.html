@@ -145,6 +145,7 @@
     <div id="flags-main"></div>
     <button id="run">Chạy ảnh đang chọn</button>
     <button id="runall" class="ghost">Chạy tất cả đang chờ</button>
+    <button id="resetflags" class="ghost" title="bỏ mọi cờ đã nhớ cho ảnh đang chọn, về mặc định của app">Về mặc định</button>
     <label>cùng lúc <input type="number" id="workers" value="2" min="1" max="6" step="1"></label>
     <span style="flex:1"></span>
     <button id="auditbtn" class="ghost">Chấm cả lô</button>
@@ -236,10 +237,23 @@ function settingsFor(name) {
   return Object.assign({}, DEFAULTS, state.saved[name] || {});
 }
 
+// Chỉ lưu những cờ khác mặc định. Lưu cả giá trị mặc định thì khi mặc định của app đổi, con số cũ
+// trong trình duyệt vẫn được gửi đi: một ảnh từng giữ "chặn tô đặc 20" từ hồi 20 là mặc định và bị
+// chặn tô đặc sau khi mặc định thành 100.
 function remember() {
   if (!state.pick) return;
-  state.saved[state.pick] = readBar();
+  const bar = readBar(), diff = {};
+  for (const f of CONFIG.flags) if (bar[f.name] !== undefined && bar[f.name] !== f.default) diff[f.name] = bar[f.name];
+  if (Object.keys(diff).length) state.saved[state.pick] = diff; else delete state.saved[state.pick];
   try { localStorage.setItem("tsp-settings", JSON.stringify(state.saved)); } catch (e) { /* riêng tư */ }
+}
+
+function forgetFlags() {
+  if (!state.pick) return;
+  delete state.saved[state.pick];
+  try { localStorage.setItem("tsp-settings", JSON.stringify(state.saved)); } catch (e) { /* riêng tư */ }
+  writeBar(DEFAULTS); loadList();
+  $("#msg").textContent = "Cờ của ảnh này đã về mặc định.";
 }
 
 function hint() {
@@ -264,6 +278,11 @@ function tagFor(name) {
 async function loadConfig() {
   CONFIG = await api("/api/config");
   for (const f of CONFIG.flags) DEFAULTS[f.name] = f.default;
+  for (const [name, s] of Object.entries(state.saved)) {          // bản lưu cũ: bỏ những giá trị bằng mặc định
+    for (const f of CONFIG.flags) if (s[f.name] === f.default) delete s[f.name];
+    if (!Object.keys(s).length) delete state.saved[name];
+  }
+  try { localStorage.setItem("tsp-settings", JSON.stringify(state.saved)); } catch (e) { /* riêng tư */ }
   $("#flags-main").innerHTML = CONFIG.flags.filter(f => f.group === "chính").map(control).join("");
   $("#flags-adv").innerHTML = CONFIG.flags.filter(f => f.group !== "chính").map(control).join("");
   for (const f of CONFIG.flags) {
@@ -420,6 +439,7 @@ $("#run").onclick = () => run(state.pick ? [state.pick] : []).catch(e => $("#msg
 $("#runall").onclick = () => run(state.images.filter(i => i.waiting).map(i => i.name))
   .catch(e => $("#msg").textContent = e.message);
 $("#bgpick").onchange = paintBg;
+$("#resetflags").onclick = forgetFlags;
 $("#auditbtn").onclick = async () => {
   const btn = $("#auditbtn");
   if ($("#audit").innerHTML) { $("#audit").innerHTML = ""; return; }   // bấm lần nữa để đóng bảng

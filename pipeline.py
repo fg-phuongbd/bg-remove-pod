@@ -1311,8 +1311,8 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             added = redundant_ink(filled, original, shirt_rgb) - redundant_ink(keyed, original, shirt_rgb)
             if added > args.fill_limit:
                 warn(f"BỎ QUA --fill-holes: tô đặc sẽ thêm {added:.0f}% mực in đè lên áo cùng màu "
-                     f"(ngưỡng {args.fill_limit:g}%). Poster thì bỏ cờ này; ảnh người quá tối so với nền "
-                     f"thì đặt sàn tô đặc 32 (--fill-floor 32) rồi chạy lại.")
+                     f"(ngưỡng chặn tô đặc {args.fill_limit:g}%). Poster thì bỏ cờ này; ảnh có người thì "
+                     f"đặt chặn tô đặc 100 (tắt chốt chặn) rồi chạy lại để tô đặc cả thân hình.")
                 silhouette = None
             else:
                 keyed = filled
@@ -1350,8 +1350,8 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             added = redundant_ink(filled, big_rgb, shirt_rgb) - redundant_ink(keyed, big_rgb, shirt_rgb)
             if added > args.fill_limit:
                 warn(f"BỎ QUA --fill-holes: trên bản in, tô đặc sẽ thêm {added:.0f}% mực in đè lên áo "
-                     f"cùng màu (ngưỡng {args.fill_limit:g}%). Poster thì bỏ cờ này; ảnh người quá tối so với "
-                     f"nền thì đặt sàn tô đặc 32 (--fill-floor 32) rồi chạy lại.")
+                     f"cùng màu (ngưỡng chặn tô đặc {args.fill_limit:g}%). Poster thì bỏ cờ này; ảnh có người "
+                     f"thì đặt chặn tô đặc 100 (tắt chốt chặn) rồi chạy lại để tô đặc cả thân hình.")
                 filled_in = False
             else:
                 keyed = filled

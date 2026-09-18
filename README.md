@@ -71,7 +71,9 @@ cùng một ảnh với cờ khác bao nhiêu lần cũng được.
 
 **2. Chọn ảnh, xem cờ của nó.** Bấm vào thẻ bên trái. Thanh cờ trên cùng luôn hiện cờ *của riêng ảnh
 đang chọn*, không phải cờ chung. Dưới tên mỗi thẻ ghi những cờ khác mặc định, ví dụ
-`áo other · đặt top-right · gom màu 8`. Trình duyệt nhớ những cờ này cả khi bạn đóng trang.
+`áo other · đặt top-right · gom màu 8`. Trình duyệt nhớ những cờ này cả khi bạn đóng trang, và
+chỉ nhớ những gì bạn đổi khác mặc định, nên khi app đổi mặc định thì ảnh cũ đi theo mặc định mới.
+Nút **Về mặc định** bỏ mọi cờ đã nhớ của ảnh đang chọn.
 
 **3. Đặt cờ theo loại thiết kế.** Hầu hết thời gian chỉ cần một cờ; phần còn lại pipeline tự quyết
 và in ra dòng log cho biết nó chọn gì.
