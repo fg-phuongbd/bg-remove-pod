@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import re
 import shutil
 import subprocess
@@ -901,16 +902,50 @@ def clean_print(img: Image.Image, dpi: int = DPI, faint: int = 8,
     return Image.fromarray(a, "RGBA")
 
 
-def save_print_png(img: Image.Image, path: Path, clean: bool = True) -> None:
-    """Lưu file in: dọn mực vô hình, gắn hồ sơ màu sRGB, ghi DPI.
+META_KEY = "tshirt-pipeline"  # tên đoạn tEXt trong file PNG ghi lại cách file được tạo
+RUN_ONLY = {"files", "keep_input", "ui", "audit"}  # cờ điều khiển một lần chạy, không nói gì về file
+
+
+def flags_used(args: argparse.Namespace) -> dict:
+    """Những cờ khác mặc định của dòng lệnh, tức những gì cần nhớ để chạy lại ra đúng file này."""
+    defaults = vars(parse_args([]))
+    return {k: v for k, v in vars(args).items() if k not in RUN_ONLY and v != defaults[k]}
+
+
+def cmd_line(flags: dict) -> str:
+    """Dựng lại dòng lệnh từ bộ cờ, để dán thẳng vào terminal."""
+    parts = ["./run.sh"]
+    for k, v in flags.items():
+        flag = "--" + k.replace("_", "-")
+        if v is True:
+            parts.append(flag)
+        elif v is not False and v is not None:
+            parts += [flag, f"{v:g}" if isinstance(v, float) else str(v)]
+    return " ".join(parts)
+
+
+def read_meta(path: Path) -> dict | None:
+    """Cách file in này được tạo, đọc từ chính file; None nếu file làm trước khi có mục này."""
+    im = Image.open(path)
+    im.load()
+    raw = getattr(im, "text", {}).get(META_KEY)
+    return json.loads(raw) if raw else None
+
+
+def save_print_png(img: Image.Image, path: Path, clean: bool = True, meta: dict | None = None) -> None:
+    """Lưu file in: dọn mực vô hình, gắn hồ sơ màu sRGB, ghi DPI, ghi cách file được tạo.
 
     sRGB phải có: RIP gặp file không gắn hồ sơ sẽ tự đoán không gian màu, và màu in ra lệch so
-    với thứ đã duyệt trên màn hình."""
-    from PIL import ImageCms  # noqa: PLC0415 - heavy import kept local
+    với thứ đã duyệt trên màn hình. `meta` là bộ cờ và cách xử lý đã chọn, đi theo file để sau
+    này mở ra là biết nó được chạy thế nào, không phải ghi chú tay sau mỗi lô."""
+    from PIL import ImageCms, PngImagePlugin  # noqa: PLC0415 - heavy import kept local
 
     path.parent.mkdir(parents=True, exist_ok=True)
     out = clean_print(img) if clean else img.convert("RGBA")
-    out.save(path, "PNG", dpi=(DPI, DPI), optimize=False,
+    info = PngImagePlugin.PngInfo()
+    if meta is not None:
+        info.add_text(META_KEY, json.dumps(meta, ensure_ascii=False))
+    out.save(path, "PNG", dpi=(DPI, DPI), optimize=False, pnginfo=info,
              icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
 
 
@@ -1084,7 +1119,9 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         result = one_ink(result, ink, bg_rgb(original, bg) if bg in BG_KINDS else bg_color(original))
     name = out_name(src.stem, box, args.place, args.scale, args.ink)
     out_path = OUTPUT_DIR / name
-    save_print_png(result, out_path, clean=not args.no_clean)
+    flags = flags_used(args)
+    save_print_png(result, out_path, clean=not args.no_clean,
+                   meta={"flags": flags, "bg": kind, "mode": bg, "how": how, "cmd": cmd_line(flags)})
     low = low_coverage(Image.open(out_path))
     if low > args.dtf_warn:
         print(f"  CẢNH BÁO in DTF: {low:.0f}% diện tích mực nằm dưới 40% độ phủ (ngưỡng {args.dtf_warn:g}%). "

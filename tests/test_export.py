@@ -49,3 +49,18 @@ def test_save_print_png_can_skip_the_cleanup(tmp_path):
     a[:, :, 3] = 5
     pipeline.save_print_png(Image.fromarray(a, "RGBA"), tmp_path / "b.png", clean=False)
     assert np.asarray(Image.open(tmp_path / "b.png"))[:, :, 3].max() == 5
+
+
+def test_save_print_png_records_how_the_file_was_made(tmp_path):
+    """Mỗi file in tự trả lời 'chạy cờ gì', thay cho việc ghi chú tay sau mỗi lô."""
+    p = tmp_path / "a.png"
+    meta = {"flags": {"fill_holes": True, "scale": 26.0}, "bg": "black", "mode": "black",
+            "how": "key nền đen + thân hình đặc", "cmd": "./run.sh --fill-holes --scale 26"}
+    pipeline.save_print_png(Image.new("RGBA", (40, 40), (255, 0, 0, 255)), p, meta=meta)
+    assert pipeline.read_meta(p) == meta
+
+
+def test_read_meta_is_none_for_a_file_made_before_this(tmp_path):
+    p = tmp_path / "cu.png"
+    Image.new("RGBA", (4, 4)).save(p)
+    assert pipeline.read_meta(p) is None

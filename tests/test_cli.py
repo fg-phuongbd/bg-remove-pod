@@ -358,3 +358,23 @@ def test_audit_survives_an_empty_print_file(dirs, capsys):
     out = capsys.readouterr().out
     assert "hinh_240x240_center.png" in out
     assert "file rỗng" in out and "Không dùng được" in out
+
+
+def test_flags_used_keeps_only_what_differs_from_the_defaults():
+    a = pipeline.parse_args(["--fill-holes", "--scale", "26", "--place", "top-right", "--keep-input", "x.png"])
+    assert pipeline.flags_used(a) == {"fill_holes": True, "scale": 26.0, "place": "top-right"}
+    assert pipeline.flags_used(pipeline.parse_args([])) == {}
+    assert pipeline.cmd_line({"fill_holes": True, "scale": 26.0, "place": "top-right"}) == \
+        "./run.sh --fill-holes --scale 26 --place top-right"
+    assert pipeline.cmd_line({}) == "./run.sh"
+
+
+def test_print_file_carries_its_flags_and_the_chosen_method(dirs):
+    src = dirs / "input" / "hinh.png"
+    _poster_on_black(src)
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--bg", "black", str(src)]) == 0
+    meta = pipeline.read_meta(dirs / "output" / "hinh_240x240_center.png")
+    assert meta["flags"] == {"size": "240x240", "bg": "black"}
+    assert meta["bg"] == "black" and meta["mode"] == "black"
+    assert meta["how"] == "key nền đen"
+    assert meta["cmd"] == "./run.sh --size 240x240 --bg black"
