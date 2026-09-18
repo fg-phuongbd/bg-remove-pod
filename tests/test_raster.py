@@ -64,3 +64,19 @@ def test_lanczos_upscale_never_calls_the_binary(monkeypatch, red_circle):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("gọi binary")))
     out = pipeline.upscale(red_circle, model="lanczos")
     assert out.size == (1600, 1600)
+
+
+def test_is_grainy_ignores_noise_around_half_alpha_in_a_dark_photo():
+    """Ảnh chụp người tối trên nền đen: key độ sáng cho da và tóc alpha quanh 120 ± 20. Đếm mảnh
+    ở đúng ngưỡng 128 thì vùng đó vỡ thành hàng nghìn đốm và ảnh chụp bị coi là hạt (Romo đo 3,1
+    trên 1000, ngang poster halftone). Đếm ở ngưỡng thấp hơn thì thân người liền lại."""
+    import numpy as np
+    from PIL import Image
+    import pipeline
+
+    rng = np.random.default_rng(3)
+    a = np.zeros((300, 300, 4), np.uint8)
+    a[40:260, 60:240, :3] = 200
+    a[40:260, 60:240, 3] = rng.normal(120, 20, (220, 180)).clip(0, 255)     # da tối, alpha quanh 128
+    assert pipeline.is_grainy(Image.fromarray(a, "RGBA")) is False
+    assert pipeline.is_grainy(_halftone()) is True                          # halftone thật vẫn là hạt

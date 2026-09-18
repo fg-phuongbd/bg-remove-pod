@@ -815,18 +815,22 @@ def one_ink(img: Image.Image, ink: tuple[int, int, int], shirt: tuple[int, int, 
     return Image.fromarray(out.round().astype(np.uint8), "RGBA")
 
 
-def is_grainy(cut: Image.Image, per_1k: float = 3.0, speck_px: int = 40) -> bool:
+def is_grainy(cut: Image.Image, per_1k: float = 2.5, speck_px: int = 40, min_alpha: int = 64) -> bool:
     """Halftone, splatter, grain: the ink is made of many tiny separate pieces.
 
-    Counted on a thumbnail no larger than 1024 px: pieces under `speck_px` per 1000 ink pixels.
-    Measured on 26 real designs, the four halftone posters and two splatter pieces sit at 3.4 to
-    21, photographs and flat art at or below 0.9. Those six all came out of Real-ESRGAN as fur
-    or blobs, so this decides whether the upscale is allowed to invent detail at all."""
+    Counted on a thumbnail no larger than 1024 px: pieces under `speck_px` per 1000 ink pixels,
+    ink being alpha above `min_alpha`. The threshold sits at 64, not 128, on purpose: a dark
+    photograph keyed on black has skin and hair at alpha 120 +- 20, and cut at 128 that breaks
+    into thousands of specks (a real portrait measured 3.1 per 1000, level with a halftone
+    poster); at 64 the body stays whole. Measured on 29 real designs at 64: the four halftone
+    posters and two splatter pieces sit at 2.8 to 11, portraits at or below 2.0, flat art at 0.
+    Those six all came out of Real-ESRGAN as fur or blobs, so this decides whether the upscale
+    is allowed to invent detail at all."""
     from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
 
     im = cut.convert("RGBA")
     im.thumbnail((1024, 1024))
-    ink = np.asarray(im)[:, :, 3] > 128
+    ink = np.asarray(im)[:, :, 3] > min_alpha
     if not ink.any():
         return False
     labels, n = ndimage.label(ink)

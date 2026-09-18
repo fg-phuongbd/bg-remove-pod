@@ -196,10 +196,12 @@ phẳng, viền cong mượt ở mọi kích cỡ.
 
 Kiểu `grain` có vì một lý do cụ thể. Cả hai model Real-ESRGAN đều coi chấm bi halftone là nhiễu cần
 "sửa": model x4plus biến chấm thành vệt lông xù, model anime biến thành mảng nứt vỡ. Lanczos thường
-giữ chấm là chấm, chỉ mềm đi một chút. Nhận diện bằng cách đếm số mảnh mực rời nhỏ: trên 26 thiết
-kế thật, bốn poster halftone và hai tấm vệt bắn có 3,4 đến 21 mảnh nhỏ trên 1000 pixel mực, còn ảnh
-chụp và đồ họa phẳng dưới 0,9. Dòng log in `kiểu: grain`; ép tay bằng `--style grain` nếu nhận diện
-sai.
+giữ chấm là chấm, chỉ mềm đi một chút. Nhận diện bằng cách đếm số mảnh mực rời nhỏ, tính mực là
+alpha trên 64: trên 29 thiết kế thật, bốn poster halftone và hai tấm vệt bắn có 2,8 đến 11 mảnh nhỏ
+trên 1000 pixel mực, ảnh chụp người dưới 2,0, đồ họa phẳng bằng 0. Ngưỡng alpha 64 thay cho 128 là
+cố ý: ảnh chụp người tối key trên nền đen có da và tóc ở alpha quanh 120, cắt đúng 128 thì vỡ thành
+hàng nghìn đốm và bị coi là hạt. Dòng log in `kiểu: grain`; ép tay bằng `--style grain` nếu nhận
+diện sai.
 
 Đổi lại, chấm bi qua Lanczos mềm hơn chấm bi bị model "sửa" thành khối: trên poster sọ halftone,
 mực đặc giảm từ 50% xuống 26% và phủ thấp tăng từ 16% lên 21%. Con số xấu hơn nhưng ảnh đúng hơn,
