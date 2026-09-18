@@ -87,6 +87,32 @@ def target_box_px(size: str) -> tuple[int, int]:
 PLACES = ("center", "top", "bottom", "left", "right",
           "top-left", "top-right", "bottom-left", "bottom-right")
 
+# Vị trí in hay dùng, tên theo người mặc: ngực trái của người mặc nằm bên PHẢI file in.
+# Cỡ là phần trăm khung: 26% của khung 4500 x 5100 là hộp 1170 x 1326 px, tức khoảng 10 cm,
+# cỡ logo ngực quen thuộc; 55% là khoảng 21 cm, một bản in ngực giữa cỡ A4.
+PRESETS: dict[str, tuple[str, float]] = {
+    "full": ("center", 100.0),        # lấp đầy khung, in lưng hoặc ngực toàn khổ
+    "chest-left": ("top-right", 26.0),   # logo ngực trái người mặc
+    "chest-right": ("top-left", 26.0),   # logo ngực phải người mặc
+    "chest": ("top", 55.0),           # ngực giữa, cỡ A4
+    "back-neck": ("top", 20.0),       # nhãn nhỏ sau gáy
+}
+
+
+def apply_preset(args: argparse.Namespace) -> argparse.Namespace:
+    """`--preset` điền `--place` và `--scale` cho những cờ còn ở mặc định; cờ đặt tay vẫn thắng.
+
+    Gọi ở đầu mỗi lần xử lý chứ không ở parse_args, để trang (dựng cờ từ dict, không qua dòng
+    lệnh) đi cùng một đường với CLI."""
+    if getattr(args, "preset", "none") in ("none", None):
+        return args
+    place, scale = PRESETS[args.preset]
+    if args.place == "center":
+        args.place = place
+    if args.scale == 100.0:
+        args.scale = scale
+    return args
+
 
 def art_box(box: tuple[int, int], scale: float) -> tuple[int, int]:
     """The box the design itself is fitted into: `scale` per cent of the print canvas, both ways.
@@ -1037,6 +1063,8 @@ def _key_fidelity(original: Image.Image, kind: str) -> float:
 
 # ---------------------------------------------------------------- pipeline
 def process_one(src: Path, args: argparse.Namespace) -> Path:
+    flags = flags_used(args)  # cờ như người dùng đặt, ghi vào file: --preset, không phải bản đã điền
+    args = apply_preset(argparse.Namespace(**vars(args)))
     box = target_box_px(args.size)
     inner = art_box(box, args.scale)
     original = load_image(src)
@@ -1129,7 +1157,6 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         result = one_ink(result, ink, bg_rgb(original, bg) if bg in BG_KINDS else bg_color(original))
     name = out_name(src.stem, box, args.place, args.scale, args.ink)
     out_path = OUTPUT_DIR / name
-    flags = flags_used(args)
     save_print_png(result, out_path, clean=not args.no_clean,
                    meta={"flags": flags, "bg": kind, "mode": bg, "how": how, "cmd": cmd_line(flags)})
     low = low_coverage(Image.open(out_path))
@@ -1240,6 +1267,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                             "ví dụ --place top-right --scale 26 cho một hình nhỏ góc trên phải")
     daily.add_argument("--scale", type=float, default=100.0,
                        help="thiết kế chiếm bao nhiêu phần trăm khung in, giữ nguyên tỉ lệ hình. Mặc định 100 = lấp đầy khung")
+    daily.add_argument("--preset", choices=["none", *PRESETS], default="none",
+                       help="vị trí in hay dùng, thay cho --place và --scale: "
+                            + ", ".join(f"{k} = {v[0]} {v[1]:g}%%" for k, v in PRESETS.items())
+                            + ". Tên theo người mặc: chest-left là ngực trái người mặc, nằm bên phải file. "
+                              "--place hoặc --scale đặt tay vẫn thắng")
     daily.add_argument("--vector", action="store_true",
                        help="minh họa phẳng: gom màu rồi trace vector (mảng màu tuyệt đối phẳng, viền cong mượt). Mặc định là raster: upscale AI, giữ nguyên màu")
     daily.add_argument("--ink", default="none",

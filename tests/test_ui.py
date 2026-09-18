@@ -312,3 +312,12 @@ def test_server_serves_the_print_file_asked_for(server, workspace):
         with pytest.raises(urllib.error.HTTPError) as e:
             get(server, "/file/a.png?out=" + urllib.parse.quote(bad))
         assert e.value.code == 404
+
+
+def test_page_offers_the_presets_and_applies_them(workspace):
+    flags = {f["name"]: f for f in ui.page_config()["flags"]}
+    assert flags["preset"]["choices"] == ["none", *pipeline.PRESETS]
+    src = workspace / "input" / "a.png"
+    _design(src)
+    pipeline.process_one(src, ui.make_args({"size": "300x300", "preset": "chest-left"}))
+    assert (workspace / "output" / "a_300x300_top-right_26pc.png").exists()

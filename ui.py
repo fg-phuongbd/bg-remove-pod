@@ -57,6 +57,7 @@ PAGE_FLAGS = {
     "size":       ("chính", "khung in", ""),
     "shirt":      ("chính", "áo", "in lên áo cùng màu nền ảnh hay khác màu"),
     "fill_holes": ("chính", "thân hình đặc", "ảnh có người: tô đặc thân hình thay vì đục lỗ"),
+    "preset":     ("chính", "mẫu vị trí", "vị trí in hay dùng, điền sẵn đặt và cỡ; chest-left = ngực trái người mặc"),
     "place":      ("chính", "đặt", "vị trí thiết kế trên khung in"),
     "scale":      ("chính", "cỡ %", "thiết kế chiếm bao nhiêu phần trăm khung in"),
     "margin":     ("chính", "lề %", "khoảng hở từ mép khung khi đặt lệch tâm"),
@@ -79,6 +80,7 @@ def page_config() -> dict:
     choices = {
         "shirt": ["same", "other", "auto"],
         "place": list(pipeline.PLACES),
+        "preset": ["none", *pipeline.PRESETS],
         "bg": ["auto", *pipeline.BG_KINDS, "ai"],
         "style": ["auto", "flat", "detail"],
         "ink": ["none", "black", "white"],

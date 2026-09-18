@@ -424,3 +424,25 @@ def test_print_verdict_copes_with_unmeasured_columns():
     assert v["muc"] == "dat"
     v = pipeline.print_verdict({"dac": 0.0, "phu_thap": 0.0, "thua": None, "sai_so": None, "shirt": None})
     assert v["muc"] == "hong" and "rỗng" in v["why"][0]
+
+
+def test_preset_fills_place_and_scale_unless_given_explicitly():
+    """`--preset chest-left` thay cho việc nhớ 'top-right 26'. Cờ đặt tay vẫn thắng preset."""
+    a = pipeline.apply_preset(pipeline.parse_args(["--preset", "chest-left"]))
+    assert (a.place, a.scale) == ("top-right", 26.0)     # ngực trái người mặc = bên phải file
+    a = pipeline.apply_preset(pipeline.parse_args(["--preset", "chest-left", "--scale", "30"]))
+    assert (a.place, a.scale) == ("top-right", 30.0)
+    a = pipeline.apply_preset(pipeline.parse_args([]))
+    assert (a.place, a.scale) == ("center", 100.0)
+    assert set(pipeline.PRESETS) >= {"full", "chest-left", "chest-right", "chest", "back-neck"}
+    with pytest.raises(SystemExit):
+        pipeline.parse_args(["--preset", "khong-co"])
+
+
+def test_preset_shows_in_the_file_name_and_is_remembered(dirs):
+    src = dirs / "input" / "hinh.png"
+    _poster_on_black(src)
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--preset", "chest-left", str(src)]) == 0
+    out = dirs / "output" / "hinh_240x240_top-right_26pc.png"
+    assert out.exists()
+    assert pipeline.read_meta(out)["cmd"] == "./run.sh --size 240x240 --preset chest-left"
