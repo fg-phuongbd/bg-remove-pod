@@ -370,3 +370,29 @@ def test_one_ink_reads_the_design_as_it_sits_on_the_shirt():
 def test_one_ink_refuses_a_color_that_would_be_invisible():
     with pytest.raises(pipeline.EmptyResult, match="không thấy gì"):
         pipeline.one_ink(Image.new("RGBA", (4, 4), (255, 255, 255, 255)), (10, 10, 10), (0, 0, 0))
+
+
+def test_solid_core_fill_floor_leaves_near_background_pixels_to_the_shirt():
+    """Ảnh đen trắng trên nền đen: quần và bóng sâu gần như cùng màu nền. Với sàn, chỗ đó để cho
+    áo làm màu đen thay vì tô một khối mực đen lên vải đen; chỗ sáng hơn nền rõ vẫn tô đặc."""
+    bg = (0, 0, 0)
+    im = Image.new("RGB", (300, 300), bg)
+    d = ImageDraw.Draw(im)
+    d.rectangle((100, 40, 200, 200), fill=(30, 60, 220))        # áo đấu: sáng, phải đặc
+    d.rectangle((120, 100, 180, 120), fill=(4, 6, 12))          # bóng sâu: cách nền 14
+    d.rectangle((100, 200, 200, 260), fill=(14, 14, 14))        # quần gần đen: cách nền 24
+    keyed = pipeline.key_bg(im, "black")
+    silhouette = Image.new("L", im.size, 0)
+    ImageDraw.Draw(silhouette).rectangle((98, 38, 202, 262), fill=255)
+    bg_rgb = pipeline.bg_rgb(im, "black")
+
+    default = pipeline.solid_core(keyed, im, silhouette, bg_rgb)
+    assert default.getpixel((150, 110))[3] == 255 and default.getpixel((150, 230))[3] == 255  # như cũ: tô hết
+
+    floored = pipeline.solid_core(keyed, im, silhouette, bg_rgb, floor=32.0)
+    assert floored.getpixel((150, 60)) == (30, 60, 220, 255)     # áo vẫn đặc, đúng màu
+    assert floored.getpixel((150, 110))[3] == keyed.getpixel((150, 110))[3]   # bóng sâu: về alpha key
+    assert floored.getpixel((150, 230))[3] == keyed.getpixel((150, 230))[3]   # quần gần đen: về alpha key
+    assert floored.getpixel((150, 230))[3] < 60
+    assert pipeline.parse_args([]).fill_floor == 0.0
+    assert pipeline.parse_args(["--fill-floor", "32"]).fill_floor == 32.0

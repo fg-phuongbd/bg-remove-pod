@@ -710,8 +710,14 @@ def redundant_ink(keyed: Image.Image, original: Image.Image, bg: tuple[int, int,
 
 
 def solid_core(keyed: Image.Image, original: Image.Image, silhouette: Image.Image,
-               bg: tuple[int, int, int], band: float = 0.001, thin: float = 0.006) -> Image.Image:
+               bg: tuple[int, int, int], band: float = 0.001, thin: float = 0.006,
+               floor: float = 0.0) -> Image.Image:
     """--fill-holes on the key path: cover the figure solidly, keep the key everywhere else.
+
+    `floor` > 0 (the --fill-floor flag) leaves pixels closer than that to the background to
+    the key: on a black-and-white photograph over black, trousers and deep shadow are the
+    background color to within a few levels, and covering them prints a slab of black ink on
+    black cloth. The default 0 covers everything the silhouette holds, as before.
 
     Keying alone punches through design areas painted in (or shaded down to) the background
     color: a dark jersey's folds on black, skin on a same-colored pink. Those are ink, not
@@ -755,9 +761,12 @@ def solid_core(keyed: Image.Image, original: Image.Image, silhouette: Image.Imag
     labels, _ = ndimage.label(gone & ~rim)
     ids = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
     frame_block = np.isin(labels, ids[ids > 0])  # body the model carried on past the picture
+    orig = np.asarray(original.convert("RGB").resize(keyed.size)).astype(np.float32)
+    if floor > 0:
+        near_bg = np.linalg.norm(orig - np.array(bg, dtype=np.float32), axis=2) <= floor
+        cover = np.where(near_bg, 0.0, cover)
     alpha = np.maximum(a_key, np.where(rim | frame_block, 0.0, cover))
     a = (alpha / 255.0)[:, :, None]
-    orig = np.asarray(original.convert("RGB").resize(keyed.size)).astype(np.float32)
     color = np.clip((orig - (1.0 - a) * np.array(bg, dtype=np.float32)) / np.where(a > 0, a, 1.0), 0, 255)
     return Image.fromarray(np.dstack([color, alpha]).round().astype(np.uint8), "RGBA")
 
@@ -1273,7 +1282,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             bg = key_style(bg, is_flat_art(original))  # flat art: distance, not brightness
         keyed = key_bg(original, bg, args.floor)
         if silhouette:
-            filled = solid_core(keyed, original, silhouette, bg_rgb(original, bg))
+            filled = solid_core(keyed, original, silhouette, bg_rgb(original, bg), floor=args.fill_floor)
             # Trên một tấm poster, model cắt hình coi cả tấm là một khối và lấp luôn nền giữa các
             # chi tiết; mực đó in ra trùng màu áo. Đo đúng điều ấy và bỏ qua nếu vượt ngưỡng, để
             # bật nhầm cờ không làm hỏng file. Ảnh có người thật chỉ tăng 5-11%, poster tăng 27-60%.
@@ -1293,15 +1302,6 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     style = detect_style(cut) if args.style == "auto" else args.style
     colors = args.colors if args.colors is not None else (12 if args.vector else 0)
     model = UPSCALE_MODEL[style]
-    how = {"none": "đã trong suốt", "ai": "cắt hình" + (" + tinh chỉnh viền" if refine else ""),
-           "black": "key nền đen", "white": "key nền trắng",
-           "color": "key khoảng cách màu" if kind in ("black", "white") else "key màu nền"}[bg]
-    how += (" + thân hình đặc" if bg != "ai" else " + lấp lỗ") if filled_in else ""
-    shirt_txt = "" if bg == "none" else f" | áo: {SHIRT_LABEL['same' if bg != 'ai' else 'other']}"
-    place_txt = "" if args.place == "center" and args.scale == 100.0 else f" | đặt: {args.place} {args.scale:g}%"
-    place_txt += "" if args.ink.lower() in ("", "none") else f" | mực: {args.ink}"
-    print(f"  nền: {kind}{shirt_txt} | cách: {how} | kiểu: {style} | {'vector' if args.vector else 'raster'}{place_txt}"
-          f"{f', gom {colors} màu' if colors else ', giữ nguyên màu'}")
 
     if args.vector:
         q = quantize(cut, colors, binary_alpha=True, merge_delta_e=args.merge)
@@ -1320,11 +1320,32 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         big_rgb = upscale(original.convert("RGB"), model=model)
         keyed = key_bg(big_rgb, bg, args.floor)
         if silhouette:
-            keyed = solid_core(keyed, big_rgb, silhouette, bg_rgb(big_rgb, bg))
+            # Chốt chặn đo lại trên chính bản sẽ in. Ở ảnh gốc, nhiễu hạt đẩy vùng tối lên trên
+            # ngưỡng "trùng màu áo"; model upscale làm mịn nó về sát nền, và một tấm ảnh đen
+            # trắng từng qua chốt ở 3% rồi ra file in 36% mực đen trên vải đen.
+            filled = solid_core(keyed, big_rgb, silhouette, bg_rgb(big_rgb, bg), floor=args.fill_floor)
+            added = redundant_ink(filled, big_rgb, bg_rgb(big_rgb, bg)) - \
+                redundant_ink(keyed, big_rgb, bg_rgb(big_rgb, bg))
+            if added > args.fill_limit:
+                print(f"  BỎ QUA --fill-holes: trên bản in, tô đặc sẽ thêm {added:.0f}% mực in đè lên áo "
+                      f"cùng màu (ngưỡng {args.fill_limit:g}%). Thân hình quá tối so với nền; thử --fill-floor 32.")
+                filled_in = False
+            else:
+                keyed = filled
         keyed = crop_to_content(keyed, min_alpha=40)
         result = keyed.resize(fit_box(*keyed.size, inner), Image.Resampling.LANCZOS)
         if colors:
             result = flatten_raster(result, colors, args.merge)
+
+    how = {"none": "đã trong suốt", "ai": "cắt hình" + (" + tinh chỉnh viền" if refine else ""),
+           "black": "key nền đen", "white": "key nền trắng",
+           "color": "key khoảng cách màu" if kind in ("black", "white") else "key màu nền"}[bg]
+    how += (" + thân hình đặc" if bg != "ai" else " + lấp lỗ") if filled_in else ""
+    shirt_txt = "" if bg == "none" else f" | áo: {SHIRT_LABEL['same' if bg != 'ai' else 'other']}"
+    place_txt = "" if args.place == "center" and args.scale == 100.0 else f" | đặt: {args.place} {args.scale:g}%"
+    place_txt += "" if args.ink.lower() in ("", "none") else f" | mực: {args.ink}"
+    print(f"  nền: {kind}{shirt_txt} | cách: {how} | kiểu: {style} | {'vector' if args.vector else 'raster'}{place_txt}"
+          f"{f', gom {colors} màu' if colors else ', giữ nguyên màu'}")
 
     result = place_on_canvas(result, box, args.place, args.margin)
     ink = parse_ink(args.ink)
@@ -1506,6 +1527,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--floor", type=float, default=KEY_FLOOR,
                    help=f"key màu nền: màu cách nền dưới ngưỡng này (khoảng cách RGB) coi như màu áo, cho trong suốt hẳn. "
                         f"Mặc định {KEY_FLOOR:g}, dập quầng xám mà máy in vẫn phủ lót trắng. 0 = tắt")
+    p.add_argument("--fill-floor", type=float, default=0.0,
+                   help="sàn cho --fill-holes: chỗ ảnh gốc cách màu nền dưới ngưỡng này (khoảng cách RGB) không tô đặc, "
+                        "để áo làm màu đó. Dùng cho ảnh đen trắng trên nền đen, khi quần và bóng sâu gần như cùng màu nền: "
+                        "thử 32. Mặc định 0 = tô đặc cả thân hình như trước")
     p.add_argument("--fill-holes", action="store_true",
                    help="không đục lỗ trong hình. Cắt hình: lấp vùng trong suốt bị bao kín (chấm sáng, răng bị model khoét). "
                         "Key (--shirt same): thân hình theo model cắt hình được giữ đặc (bóng áo tối, da trùng màu nền), ngoài thân hình vẫn key. "

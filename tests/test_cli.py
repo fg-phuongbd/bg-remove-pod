@@ -551,3 +551,30 @@ def test_verdict_explains_redundant_ink_without_blaming_a_poster():
     v = pipeline.print_verdict({"dac": 97.0, "phu_thap": 0.5, "thua": 36.0, "sai_so": 1.0, "shirt": "#141416"})
     assert v["muc"] == "hong"
     assert "thân hình quá tối" in v["why"][0] and "poster" in v["why"][0]
+
+
+def test_fill_guard_measures_the_print_resolution_image(dirs, monkeypatch, capsys):
+    """Chốt chặn đo ở ảnh gốc từng cho qua một tấm mà file in cuối có 36% mực trùng áo: model
+    upscale làm mịn vùng tối về sát màu nền. Phải đo trên chính bản sẽ in."""
+    from PIL import ImageDraw
+    im = Image.new("RGB", (240, 240), (0, 0, 0))
+    ImageDraw.Draw(im).rectangle((60, 40, 180, 220), fill=(40, 40, 40))     # thân người xám tối, cách nền 69
+    src = dirs / "input" / "toi.png"
+    im.save(src)
+    monkeypatch.setattr(pipeline, "remove_bg", lambda img: Image.new("RGBA", img.size, (255, 255, 255, 255)))
+
+    def smoothing_upscale(img, scale=4, model=""):          # "upscale" kéo nửa dưới thân người về sát màu nền
+        a = np.asarray(img.convert("RGB")).copy()
+        body = a.max(axis=2) > 0
+        body[:130] = False
+        a[body] = (12, 12, 12)
+        return Image.fromarray(a, "RGB").convert(img.mode)
+    monkeypatch.setattr(pipeline, "upscale", smoothing_upscale)
+
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--fill-holes", "--bg", "black", str(src)]) == 0
+    log = capsys.readouterr().out
+    assert "BỎ QUA --fill-holes" in log
+    assert (dirs / "output" / "toi_240x240_center.png").exists()
+    assert not (dirs / "output" / "toi_240x240_center_fill.png").exists()
+    rep = pipeline.measure_print(dirs / "output" / "toi_240x240_center.png", src)
+    assert rep["thua"] < 20
