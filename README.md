@@ -376,11 +376,15 @@ khi mực thừa quá 20%, sai số quá 5, hoặc mực đặc dưới 50%.
 tên-ảnh_khung-in_vị-trí.png       ->  skull_4500x5100_center.png
 tên-ảnh_khung-in_vị-trí_cỡ.png    ->  skull_4500x5100_top-right_26pc.png
 tên-ảnh_khung-in_vị-trí_mực.png   ->  skull_4500x5100_center_ink-black.png
+…_cutout / _fill / _vector        ->  skull_4500x5100_center_fill.png
+…_grain / _flat / _detail / _c8   ->  skull_4500x5100_center_grain.png
 ```
 
-Cỡ và màu mực chỉ xuất hiện khi khác mặc định, để tên mặc định vẫn gọn. Nhờ mang theo khung và vị trí, chạy lại
-cùng một ảnh ở cỡ hoặc vị trí khác sẽ ra file riêng chứ không đè lên nhau. Ảnh so sánh trong
-`review/` dùng đúng tên đó.
+Mặc định thì tên gọn. Mọi cờ làm **đổi bức ảnh** đều để một đuôi trong tên, theo thứ tự cố định:
+cỡ, màu mực, `cutout` (áo khác màu), `fill` (thân hình đặc), `vector`, kiểu upscale ép tay, `cN` gom
+màu, `dtf-safe`. Nhờ vậy chạy cùng một ảnh có và không có `thân hình đặc` ra **hai file** nằm cạnh
+nhau để so trên trang, thay vì lần sau đè lần trước. Đuôi `fill` chỉ xuất hiện khi thật sự đã tô
+đặc; chốt chặn bỏ qua thì tên không có nó. Ảnh so sánh trong `review/` dùng đúng tên đó.
 
 ## File in nhớ cách nó được tạo
 

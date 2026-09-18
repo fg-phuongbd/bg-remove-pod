@@ -33,12 +33,12 @@ def test_main_batch_isolates_failures(tmp_path, monkeypatch, red_circle):
     rc = pipeline.main(["--vector", "--size", "1181x1000"])
 
     assert rc == 1
-    out = Image.open(pipeline.OUTPUT_DIR / "ok_1181x1000_center.png")
+    out = Image.open(pipeline.OUTPUT_DIR / "ok_1181x1000_center_vector.png")   # --vector để dấu trong tên
     assert out.size == (1181, 1000)
     assert round(out.info["dpi"][0]) == 300
     assert (pipeline.INPUT_DIR / "done" / "ok.png").exists()
     assert (pipeline.INPUT_DIR / "failed" / "bad.png").exists()
-    assert (pipeline.REVIEW_DIR / "ok_1181x1000_center.png").exists()
+    assert (pipeline.REVIEW_DIR / "ok_1181x1000_center_vector.png").exists()
     assert not (pipeline.INPUT_DIR / "ok.png").exists()
 
 
@@ -395,7 +395,7 @@ def test_measure_does_not_grade_a_cutout_against_the_wrong_shirt(dirs, monkeypat
     src = dirs / "input" / "hinh.png"
     _poster_on_black(src)
     assert pipeline.main(["--size", "240x240", "--keep-input", "--shirt", "other", str(src)]) == 0
-    out = dirs / "output" / "hinh_240x240_center.png"
+    out = dirs / "output" / "hinh_240x240_center_cutout.png"                  # áo khác màu để dấu trong tên
     rep = pipeline.measure_print(out, src)
     assert rep["dac"] > 0 and rep["phu_thap"] >= 0
     assert rep["thua"] is None and rep["sai_so"] is None
@@ -405,7 +405,7 @@ def test_measure_does_not_grade_a_cutout_against_the_wrong_shirt(dirs, monkeypat
     capsys.readouterr()
     assert pipeline.main(["--audit"]) == 0
     table = capsys.readouterr().out
-    assert "hinh_240x240_center.png" in table and "—" in table
+    assert "hinh_240x240_center_cutout.png" in table and "—" in table
 
 
 def test_measure_skips_fidelity_for_a_one_ink_file(dirs):
@@ -506,3 +506,48 @@ def test_dtf_safe_thickens_before_saving(dirs):
     assert pipeline.main(["--size", "240x240", "--keep-input", "--dtf-safe", str(src)]) == 0
     safe = pipeline.fine_ink(Image.open(dirs / "output" / "line_240x240_center_dtf-safe.png"))["manh"]
     assert thin > 50 and safe < 5
+
+
+def test_out_name_tags_the_flags_that_change_the_picture():
+    """Hai lần chạy khác cờ xử lý phải ra hai file, không đè nhau."""
+    n = pipeline.out_name
+    base = n("a", (4500, 5100), "center", 100.0)
+    assert base == "a_4500x5100_center.png"
+    assert n("a", (4500, 5100), "center", 100.0, fill=True) == "a_4500x5100_center_fill.png"
+    assert n("a", (4500, 5100), "center", 100.0, cutout=True) == "a_4500x5100_center_cutout.png"
+    assert n("a", (4500, 5100), "center", 100.0, vector=True) == "a_4500x5100_center_vector.png"
+    assert n("a", (4500, 5100), "center", 100.0, style="grain") == "a_4500x5100_center_grain.png"
+    assert n("a", (4500, 5100), "center", 100.0, style="auto") == base          # auto = không ép, không đuôi
+    assert n("a", (4500, 5100), "center", 100.0, colors=8) == "a_4500x5100_center_c8.png"
+    # thứ tự cố định để cùng bộ cờ luôn ra cùng tên
+    assert n("a", (4500, 5100), "top-right", 26.0, "black", True, fill=True, cutout=True) == \
+        "a_4500x5100_top-right_26pc_ink-black_cutout_fill_dtf-safe.png"
+
+
+def test_two_runs_with_different_flags_keep_both_files(dirs, monkeypatch):
+    monkeypatch.setattr(pipeline, "remove_bg", _fake_cutout)
+    src = dirs / "input" / "hinh.png"
+    _poster_on_black(src)
+    assert pipeline.main(["--size", "240x240", "--keep-input", str(src)]) == 0
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--fill-holes", "--fill-limit", "100", str(src)]) == 0
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--shirt", "other", str(src)]) == 0
+    names = sorted(p.name for p in (dirs / "output").glob("hinh_*.png"))
+    assert names == ["hinh_240x240_center.png", "hinh_240x240_center_cutout.png", "hinh_240x240_center_fill.png"]
+    assert pipeline.read_meta(dirs / "output" / "hinh_240x240_center_fill.png")["flags"]["fill_holes"] is True
+
+
+def test_fill_that_is_skipped_does_not_tag_the_file(dirs, monkeypatch, capsys):
+    """Chốt chặn bỏ qua tô đặc thì file không được mang đuôi _fill, vì nó không hề được tô."""
+    monkeypatch.setattr(pipeline, "remove_bg", lambda img: Image.new("RGBA", img.size, (255, 255, 255, 255)))
+    src = dirs / "input" / "poster.png"
+    _poster_on_black(src)
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--fill-holes", "--bg", "black", str(src)]) == 0
+    assert "BỎ QUA --fill-holes" in capsys.readouterr().out
+    assert (dirs / "output" / "poster_240x240_center.png").exists()
+    assert not (dirs / "output" / "poster_240x240_center_fill.png").exists()
+
+
+def test_verdict_explains_redundant_ink_without_blaming_a_poster():
+    v = pipeline.print_verdict({"dac": 97.0, "phu_thap": 0.5, "thua": 36.0, "sai_so": 1.0, "shirt": "#141416"})
+    assert v["muc"] == "hong"
+    assert "thân hình quá tối" in v["why"][0] and "poster" in v["why"][0]

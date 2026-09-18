@@ -65,13 +65,21 @@ def load_image(path: Path) -> Image.Image:
 
 
 def out_name(stem: str, box: tuple[int, int], place: str, scale: float, ink: str = "none",
-             dtf_safe: bool = False) -> str:
-    """Tên file in: tên ảnh, khung in, vị trí, rồi cỡ, màu mực và nới nét nếu khác mặc định.
+             dtf_safe: bool = False, *, fill: bool = False, cutout: bool = False, vector: bool = False,
+             style: str = "auto", colors: int | None = None) -> str:
+    """Tên file in: tên ảnh, khung in, vị trí, rồi một đuôi cho mỗi cờ khác mặc định làm đổi bức ảnh.
 
-    Cỡ và màu mực chỉ xuất hiện khi khác mặc định để tên vẫn gọn (`name_4500x5100_center.png`),
-    nhưng hai bản khác cỡ hoặc khác mực thì không đè lên nhau."""
+    Mặc định vẫn gọn (`name_4500x5100_center.png`). Mọi cờ đổi kết quả đều để dấu trong tên,
+    theo thứ tự cố định, để hai lần chạy khác cờ ra hai file thay vì lần sau đè lần trước: cỡ,
+    màu mực, cắt hình (áo khác màu), thân hình đặc, vector, kiểu upscale ép tay, gom màu, nới nét.
+    `fill` là đã tô đặc thật, không phải cờ đã bật: chốt chặn bỏ qua thì file không mang đuôi."""
     tail = "" if scale == 100.0 else f"_{scale:g}pc"
     tail += "" if ink.strip().lower() in ("", "none") else f"_ink-{ink.strip().lower().lstrip('#')}"
+    tail += "_cutout" if cutout else ""
+    tail += "_fill" if fill else ""
+    tail += "_vector" if vector else ""
+    tail += f"_{style}" if style not in ("auto", "", None) else ""
+    tail += f"_c{colors}" if colors else ""
     tail += "_dtf-safe" if dtf_safe else ""
     return f"{stem}_{box[0]}x{box[1]}_{place}{tail}.png"
 
@@ -1329,7 +1337,9 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         result = one_ink(result, ink, bg_rgb(original, bg) if bg in BG_KINDS else bg_color(original))
     if args.dtf_safe:
         result = min_feature(result)
-    name = out_name(src.stem, box, args.place, args.scale, args.ink, args.dtf_safe)
+    name = out_name(src.stem, box, args.place, args.scale, args.ink, args.dtf_safe,
+                    fill=filled_in, cutout=(bg == "ai"), vector=args.vector, style=args.style,
+                    colors=args.colors)
     out_path = OUTPUT_DIR / name
     save_print_png(result, out_path, clean=not args.no_clean,
                    meta={"flags": flags, "bg": kind, "mode": bg, "how": how, "cmd": cmd_line(flags)})
@@ -1353,8 +1363,9 @@ def print_verdict(report: dict, dtf_warn: float = DTF_WARN) -> dict:
     if report["dac"] == 0 and not thua:
         hard.append("file rỗng, không có pixel mực nào")
     if thua is not None and thua > 20:
-        hard.append(f"{report['thua']:.0f}% mực in đè lên áo cùng màu, gần như chắc là bật "
-                    f"--fill-holes nhầm cho poster")
+        hard.append(f"{report['thua']:.0f}% mực in đè lên áo cùng màu: thân hình quá tối so với nền "
+                    f"nên tô đặc thành khối mực trùng màu vải, hoặc bật --fill-holes nhầm cho poster. "
+                    f"Chạy lại không có cờ đó và so hai bản")
     if (report.get("sai_so") or 0) > 5:
         hard.append(f"sai số khi in {report['sai_so']:.1f} mức trên 255, mở ảnh so sánh xem bằng mắt")
     if report.get("phu_thap", 0) > dtf_warn:
