@@ -65,8 +65,8 @@ không gửi ảnh đi đâu.
 
 ### Năm bước
 
-**1. Thêm ảnh.** Kéo thả vào bất cứ đâu trên trang, hoặc chép vào `input/` rồi tải lại trang. Nhận
-png, jpg, webp. Ảnh gốc được giữ nguyên tại chỗ, không bị chuyển sang `input/done/`, nên chạy lại
+**1. Thêm ảnh.** Bấm **Thêm ảnh…** ở cột trái, kéo thả vào bất cứ đâu trên trang, hoặc chép vào
+`input/` rồi tải lại trang. Nhận png, jpg, webp. Ảnh gốc được giữ nguyên tại chỗ, không bị chuyển sang `input/done/`, nên chạy lại
 cùng một ảnh với cờ khác bao nhiêu lần cũng được.
 
 **2. Chọn ảnh, xem cờ của nó.** Bấm vào thẻ bên trái. Thanh cờ trên cùng luôn hiện cờ *của riêng ảnh
@@ -93,6 +93,9 @@ trị mặc định lấy thẳng từ `parse_args`, nên thêm cờ mới vào 
 mỗi ảnh dùng cờ riêng của nó. Ô `cùng lúc` đặt số ảnh chạy song song, mặc định 2; đẩy lên 3 thì nhanh
 hơn rõ, cao hơn nữa thì máy đuối vì mỗi ảnh giữ vài mảng cỡ 5000 x 5000 trong bộ nhớ. Mỗi ảnh mất
 khoảng 14 giây, hoặc 45 giây nếu bật `thân hình đặc` vì phải chạy thêm model cắt hình.
+
+Hai khung ảnh luôn thu cả file vào cho vừa. Bấm vào ảnh để xem 1:1 bản xem trước 1400 px và cuộn
+soi mép, bấm lần nữa để thu về.
 
 **5. Đọc kết luận.** Ô màu trả lời thẳng, các con số bên cạnh là dẫn chứng. Dưới các con số là
 `cách` pipeline đã chọn và `cờ đã dùng`, một dòng lệnh dán lại vào terminal là ra đúng file này.

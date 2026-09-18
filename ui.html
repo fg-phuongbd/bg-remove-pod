@@ -21,6 +21,7 @@
   header { padding: 14px 16px; border-bottom: 1px solid var(--line); }
   header h1 { margin: 0 0 2px; font-size: 15px; font-weight: 600; }
   header p { margin: 0; color: var(--dim); font-size: 12px; }
+  header button { margin-top: 10px; width: 100%; }
   #list { overflow-y: auto; flex: 1; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
   .card {
     background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px;
@@ -52,11 +53,16 @@
   #stage { flex: 1; overflow: auto; padding: 16px; display: flex; gap: 16px; min-height: 0; }
   .pane { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
   .pane h2 { margin: 0; font-size: 12px; font-weight: 600; color: var(--dim); }
+  /* Ảnh luôn nằm gọn trong khung, dù khung in dọc 4500 x 5100 trên màn hình ngang: khung là
+     flex có chiều cao xác định nên max-height 100% của ảnh có nghĩa. Bấm vào ảnh để xem 1:1
+     bản xem trước 1400 px và cuộn, bấm lần nữa để thu về. */
   .view {
-    flex: 1; border-radius: 8px; border: 1px solid var(--line); display: grid; place-items: center;
-    padding: 10px; min-height: 240px; overflow: hidden;
+    flex: 1; border-radius: 8px; border: 1px solid var(--line); display: flex;
+    align-items: center; justify-content: center; padding: 10px; min-height: 240px; overflow: hidden;
   }
-  .view img { max-width: 100%; max-height: 72vh; object-fit: contain; }
+  .view img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; }
+  .view.zoom { display: block; overflow: auto; }
+  .view.zoom img { max-width: none; max-height: none; cursor: zoom-out; }
   /* Viền đứt = mép khung in. Không có nó thì khung trong suốt lẫn vào nền xem và
      không thể biết hình đang nằm ở đâu trong khung. */
   #outview img { outline: 1px dashed rgba(255,255,255,.45); outline-offset: 0; }
@@ -125,6 +131,8 @@
   <header>
     <h1>tshirt-pipeline</h1>
     <p id="count">đang nạp…</p>
+    <button id="addbtn" class="ghost" title="chọn ảnh png, jpg, webp; hoặc kéo thả vào bất cứ đâu trên trang">Thêm ảnh…</button>
+    <input type="file" id="addfile" multiple accept="image/png,image/jpeg,image/webp" hidden>
   </header>
   <div id="list"></div>
 </aside>
@@ -434,11 +442,21 @@ let dragDepth = 0;
 addEventListener("dragenter", e => { e.preventDefault(); if (++dragDepth === 1) document.body.classList.add("drop"); });
 addEventListener("dragover", e => e.preventDefault());
 addEventListener("dragleave", e => { e.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("drop"); } });
-addEventListener("drop", async e => {
+addEventListener("drop", e => {
   e.preventDefault();
   dragDepth = 0;
   document.body.classList.remove("drop");
-  const files = [...(e.dataTransfer?.files || [])];
+  addFiles([...(e.dataTransfer?.files || [])]);
+});
+$("#addbtn").onclick = () => $("#addfile").click();
+$("#addfile").onchange = async () => { await addFiles([...$("#addfile").files]); $("#addfile").value = ""; };
+// Bấm vào ảnh để xem 1:1 và cuộn; bấm lần nữa để thu về khung.
+$("#stage").addEventListener("click", e => {
+  const view = e.target.closest(".view");
+  if (view && e.target.tagName === "IMG") view.classList.toggle("zoom");
+});
+
+async function addFiles(files) {
   if (!files.length) return;
   const added = [];
   for (const f of files) {
@@ -451,7 +469,7 @@ addEventListener("drop", async e => {
   $("#msg").textContent = `Đã thêm ${added.length} ảnh vào input/`;
   await loadList();
   await select(added[0]);
-});
+}
 
 loadConfig()
   .then(loadList)
