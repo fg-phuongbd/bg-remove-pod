@@ -763,8 +763,10 @@ def solid_core(keyed: Image.Image, original: Image.Image, silhouette: Image.Imag
     frame_block = np.isin(labels, ids[ids > 0])  # body the model carried on past the picture
     orig = np.asarray(original.convert("RGB").resize(keyed.size)).astype(np.float32)
     if floor > 0:
-        near_bg = np.linalg.norm(orig - np.array(bg, dtype=np.float32), axis=2) <= floor
-        cover = np.where(near_bg, 0.0, cover)
+        # Khoảng cách tới màu nền ĐO ĐƯỢC (viền ảnh), không tới `bg` mà key giải màu: nền ảnh AI
+        # thường là (19, 19, 19) chứ không đen tuyệt đối, và quần xám 27 mức chỉ cách nó 14.
+        shirt = np.array(bg_color(original), dtype=np.float32)
+        cover = np.where(np.linalg.norm(orig - shirt, axis=2) <= floor, 0.0, cover)
     alpha = np.maximum(a_key, np.where(rim | frame_block, 0.0, cover))
     a = (alpha / 255.0)[:, :, None]
     color = np.clip((orig - (1.0 - a) * np.array(bg, dtype=np.float32)) / np.where(a > 0, a, 1.0), 0, 255)
@@ -1286,8 +1288,8 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             # Trên một tấm poster, model cắt hình coi cả tấm là một khối và lấp luôn nền giữa các
             # chi tiết; mực đó in ra trùng màu áo. Đo đúng điều ấy và bỏ qua nếu vượt ngưỡng, để
             # bật nhầm cờ không làm hỏng file. Ảnh có người thật chỉ tăng 5-11%, poster tăng 27-60%.
-            added = redundant_ink(filled, original, bg_rgb(original, bg)) - \
-                redundant_ink(keyed, original, bg_rgb(original, bg))
+            shirt_rgb = bg_color(original)  # nền đo được, cùng anchor với cột "mực trùng màu áo"
+            added = redundant_ink(filled, original, shirt_rgb) - redundant_ink(keyed, original, shirt_rgb)
             if added > args.fill_limit:
                 print(f"  BỎ QUA --fill-holes: tô đặc sẽ thêm {added:.0f}% mực in đè lên áo cùng màu "
                       f"(ngưỡng {args.fill_limit:g}%). Cờ này dành cho ảnh có người, không dành cho poster.")
@@ -1324,8 +1326,8 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             # ngưỡng "trùng màu áo"; model upscale làm mịn nó về sát nền, và một tấm ảnh đen
             # trắng từng qua chốt ở 3% rồi ra file in 36% mực đen trên vải đen.
             filled = solid_core(keyed, big_rgb, silhouette, bg_rgb(big_rgb, bg), floor=args.fill_floor)
-            added = redundant_ink(filled, big_rgb, bg_rgb(big_rgb, bg)) - \
-                redundant_ink(keyed, big_rgb, bg_rgb(big_rgb, bg))
+            shirt_rgb = bg_color(original)  # nền đo được, cùng anchor với cột "mực trùng màu áo"
+            added = redundant_ink(filled, big_rgb, shirt_rgb) - redundant_ink(keyed, big_rgb, shirt_rgb)
             if added > args.fill_limit:
                 print(f"  BỎ QUA --fill-holes: trên bản in, tô đặc sẽ thêm {added:.0f}% mực in đè lên áo "
                       f"cùng màu (ngưỡng {args.fill_limit:g}%). Thân hình quá tối so với nền; thử --fill-floor 32.")

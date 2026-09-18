@@ -227,7 +227,8 @@ Nâng cao, thường không cần:
 | `--merge D` | 12 | Ngưỡng gộp hai màu gần nhau khi gom (CIELAB ΔE). Tăng nếu còn đốm màu lệch, giảm nếu hai màu khác bị gộp. |
 | `--dtf-warn P` | 5 | Cảnh báo khi quá P phần trăm diện tích mực nằm dưới 40% độ phủ, mức mà in DTF dễ bong. `100` = tắt. |
 | `--no-clean` | tắt | Không dọn mực vô hình trước khi lưu. Mặc định có dọn. |
-| `--fill-limit P` | 20 | Chốt chặn cho `--fill-holes`: nếu tô đặc làm tăng quá P phần trăm mực in đè lên áo cùng màu thì bỏ qua và cảnh báo. `100` = tắt. |
+| `--fill-limit P` | 20 | Chốt chặn cho `--fill-holes`: nếu tô đặc làm tăng quá P phần trăm mực in đè lên áo cùng màu thì bỏ qua và cảnh báo. Đo trên chính bản sẽ in. `100` = tắt. |
+| `--fill-floor D` | 0 | Sàn cho `--fill-holes`: chỗ ảnh gốc cách màu nền dưới D không tô đặc, để áo làm màu đó. Ảnh đen trắng trên nền đen thử `32`. Xem mục **Thân hình quá tối so với nền**. |
 | `--fill-holes` | tắt | Không đục lỗ trong hình. Cắt hình: lấp chi tiết trắng bị model khoét (mắt, răng). Key `--shirt same`: thân hình nhân vật theo model cắt hình được giữ đặc (bóng áo tối trên nền đen, da trùng màu nền), ngoài thân hình vẫn key nên chữ ký, glow giữ nguyên. Không dùng nếu có lỗ chữ cố ý. |
 | `--keep-input` | tắt | Không chuyển ảnh gốc khỏi `input/`. |
 | `--floor D` | 32 | Key màu nền: màu cách nền dưới ngưỡng này (khoảng cách RGB) cho trong suốt hẳn. Dập quầng xám mà máy in vẫn phủ lót trắng. `0` = tắt. |
@@ -271,7 +272,20 @@ dùng cờ này nếu thiết kế có lỗ xuyên cố ý.
 **Chốt chặn tự động.** Với poster, model cắt hình coi cả tấm là một khối và lấp luôn nền giữa các
 chi tiết; mực đó in ra trùng màu áo, vừa phí vừa nổi thành mảng trên vải. Nên pipeline đo mức tăng
 của loại mực đó và bỏ qua việc tô đặc nếu vượt `--fill-limit`, mặc định 20%, kèm một dòng cảnh báo.
-Đo trên bộ ảnh thật: ảnh có người thật tăng 5 đến 11%, còn ba tấm poster tăng 27 đến 60%.
+Đo trên bộ ảnh thật: ảnh có người thật tăng 5 đến 11%, còn ba tấm poster tăng 27 đến 60%. Phép đo
+làm trên **chính bản sẽ in**, sau upscale: ở ảnh gốc, nhiễu hạt đẩy vùng tối lên trên ngưỡng, còn
+model upscale làm mịn nó về sát nền, và một tấm từng qua chốt ở 3% rồi ra file in 36%.
+
+### Thân hình quá tối so với nền: `--fill-floor`
+
+Ảnh chụp đen trắng trên nền đen là trường hợp khó: quần, bóng dưới cánh tay và nếp áo tối chỉ cách
+nền vài mức, nhìn trên màn hình là đen. Tô đặc cả thân hình biến chúng thành một khối mực gần đen
+in lên vải đen, tốn mực, dày bóng như nhựa, và mép silhouette lộ thành đường ánh trên vải. Không tô
+thì mặt và cánh tay in mỏng.
+
+`--fill-floor D` là điểm giữa: chỗ ảnh gốc cách màu nền dưới D không tô đặc mà để áo làm màu đó,
+chỗ sáng hơn nền rõ vẫn tô. Mặc định 0 giữ hành vi cũ, tô cả thân hình. Với ảnh đen trắng thử `32`,
+cùng mức với `--floor` của bước key. Xem bảng so sánh trên ảnh thật ở cuối mục này để chọn.
 
 ## Hai kiểu key, pipeline tự chọn
 

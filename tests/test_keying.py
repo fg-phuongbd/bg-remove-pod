@@ -396,3 +396,22 @@ def test_solid_core_fill_floor_leaves_near_background_pixels_to_the_shirt():
     assert floored.getpixel((150, 230))[3] < 60
     assert pipeline.parse_args([]).fill_floor == 0.0
     assert pipeline.parse_args(["--fill-floor", "32"]).fill_floor == 32.0
+
+
+def test_fill_floor_and_guard_anchor_on_the_measured_background():
+    """Nền ảnh AI hiếm khi đen tuyệt đối: (19, 19, 19) là thường. Sàn và chốt chặn phải đo khoảng
+    cách tới màu nền ĐO ĐƯỢC, không phải tới (0, 0, 0), nếu không thân người xám 27 mức lọt qua."""
+    bg = (19, 19, 19)
+    im = Image.new("RGB", (300, 300), bg)
+    d = ImageDraw.Draw(im)
+    d.rectangle((100, 40, 200, 120), fill=(230, 230, 230))     # áo trắng
+    d.rectangle((100, 120, 200, 260), fill=(27, 27, 27))       # quần: cách nền đo được 14, cách (0,0,0) 47
+    keyed = pipeline.key_bg(im, "black")
+    silhouette = Image.new("L", im.size, 0)
+    ImageDraw.Draw(silhouette).rectangle((98, 38, 202, 262), fill=255)
+    out = pipeline.solid_core(keyed, im, silhouette, pipeline.bg_rgb(im, "black"), floor=32.0)
+    assert out.getpixel((150, 80))[3] == 255                   # áo trắng đặc
+    assert out.getpixel((150, 200))[3] == keyed.getpixel((150, 200))[3] < 60   # quần để cho áo
+    full = pipeline.solid_core(keyed, im, silhouette, pipeline.bg_rgb(im, "black"))
+    assert pipeline.redundant_ink(full, im, pipeline.bg_color(im)) > 40   # đo đúng nền: khối quần là mực trùng áo
+    assert pipeline.redundant_ink(full, im, (0, 0, 0)) < 5              # đo sai nền (0,0,0) thì không thấy gì
