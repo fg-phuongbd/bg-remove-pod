@@ -477,6 +477,45 @@ CẢNH BÁO ảnh gốc nhỏ: 1024x1024 px phải phóng 4,4 lần cho khung n�
 Với ảnh AI 1024 px in khổ mặc định thì mức 4,4 là thường gặp và vẫn in tốt; con số này đáng lo khi
 lên 6 đến 8 lần, ví dụ ảnh 512 px hoặc ảnh đã cắt nhỏ.
 
+## Ảnh gốc lớn (2K, 4K)
+
+Ảnh gốc nào mà model xử lý vừa bộ nhớ, tức ảnh ra khỏi model (4 lần mỗi cạnh) không quá 40 triệu
+pixel, thì luôn qua model như cũ. Mốc đó là khoảng 1580 x 1580, nên mọi ảnh ChatGPT (1024, 1254,
+1024 x 1536) đều thuộc nhóm này, **kể cả khi in nhỏ**. Ở `chest-left` ảnh 1254 px chỉ cần phóng 1,1
+lần, nhưng model vẫn làm mép và mảng mực đặc hơn: bỏ model thì mực đặc giảm từ 72% xuống 50%, phủ
+thấp tăng từ 10% lên 15%.
+
+Chỉ ảnh lớn hơn mốc đó mới đi đường khác. Pipeline đo phần hình phải phóng bao nhiêu lần để lấp
+khung, rồi chọn. Dòng log ghi đường đã chọn ở mục `phóng:`.
+
+| Ảnh gốc | Phải phóng | Cách | Log |
+|---|---|---|---|
+| tới khoảng 1580 px | bao nhiêu cũng vậy | Model 4 lần như cũ. | `phóng: model x4` |
+| lớn hơn, ví dụ 4096 px | tới 2 lần | Không qua model: key ở độ phân giải gốc, co giãn bằng Lanczos. Chi tiết thật đã đủ. | `phóng: Lanczos, ảnh gốc đủ lớn` |
+| lớn hơn, ví dụ 2048 px | trên 2 lần | Thu ảnh gốc vừa đủ cho ngân sách, rồi model 4 lần. | `phóng: model x4, thu ảnh gốc còn 77%` |
+
+Trước đây mọi ảnh đều qua model 4 lần. Ảnh 4096 px thành 16384 px và chạy hỏng, vì Pillow từ chối
+mở ảnh trên 179 triệu pixel. Ảnh 3840 x 2160 thì chạy được nhưng ngốn 17 GB RAM. Đo trên máy 16 GB:
+
+| Ảnh gốc | Trước | Giờ |
+|---|---|---|
+| 4096 x 4096 | lỗi sau 112 s | 6 s, 2,8 GB |
+| 3840 x 2160 | 70 s, 17 GB | 4 s, 1,7 GB |
+| 2048 x 2048 | chưa đo | 22 s, 5,8 GB |
+| 1254 x 1254 | 15 s, 3,5 GB | như cũ |
+
+Còn một trường hợp: **hình nhỏ nằm giữa ảnh gốc lớn**, ví dụ hình 1700 px giữa khung 4K màn hình
+3840 x 2160. Muốn qua model thì phải thu ảnh nhiều tới mức mất chi tiết thật, nên pipeline phóng
+bằng Lanczos và in cảnh báo:
+
+```
+CẢNH BÁO hình nhỏ trong ảnh gốc lớn: hình chỉ 1716x2078 px trong ảnh 3840x2160, phải phóng 2,5 lần
+bằng Lanczos vì ảnh quá lớn để qua model upscale; viền có thể mềm. Cắt sát hình trước khi đưa vào để
+dùng model.
+```
+
+Cắt bỏ phần nền thừa quanh hình rồi chạy lại là đi được đường model.
+
 ## Nét mảnh và đốm nhỏ: `--dtf-safe`
 
 DTF bám kém ở hai chỗ: nét mảnh hơn khoảng 0,5 mm và đốm rời nhỏ hơn khoảng 1 mm². Bột keo không

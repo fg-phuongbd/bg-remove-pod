@@ -31,6 +31,10 @@ BIN_DIR = ROOT / "bin"
 REALESRGAN_BIN = BIN_DIR / "realesrgan-ncnn-vulkan"
 DPI = 300
 UPSCALE = 4  # Real-ESRGAN phóng 4 lần; xa hơn là Lanczos kéo giãn
+MODEL_MIN_GROW = 2.0  # chỉ cần phóng tới mức này thì ảnh gốc đã đủ chi tiết, Lanczos là đủ
+# Ảnh ra khỏi model tối đa bao nhiêu pixel. Các bước sau tốn khoảng 130 byte mỗi pixel: ảnh ChatGPT
+# 1254 px ra 25 triệu pixel (~3 GB), còn ảnh 3840x2160 qua model 4 lần ra 132 triệu (17 GB, hết RAM).
+MODEL_MAX_PX = 40_000_000
 DEFAULT_SIZE = "4500x5100"  # px; Printful/Merch-style print file (38.1 x 43.2 cm at 300 DPI)
 REMBG_MODEL = "birefnet-general"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -452,6 +456,36 @@ def upscale(img: Image.Image, scale: int = 4, model: str = "realesrgan-x4plus-an
             return Image.open(dst).convert(img.mode).copy()
     print("  CẢNH BÁO: không có Real-ESRGAN trong bin/, dùng Lanczos thay thế")
     return img.resize((img.width * scale, img.height * scale), Image.Resampling.LANCZOS)
+
+
+def upscale_plan(src: tuple[int, int], content: tuple[int, int], inner: tuple[int, int]) -> float | None:
+    """How much to shrink `src` before the 4x model, or None to skip the model.
+
+    A source whose 4x output fits in MODEL_MAX_PX always goes through the model unshrunk, even
+    for a small placement: the model firms up edges and solid ink on the way, and skipping it
+    on a 1254 px image at chest-left dropped solid ink from 72% to 50%. Only a source too big
+    for that (a 4K image would come out 16K, which no step after it can hold) takes another road.
+    `content` is the design's box inside `src`, which is what has to fill `inner`. Needing at
+    most MODEL_MIN_GROW, the source already has the detail and the final Lanczos resize is
+    enough. Otherwise it is shrunk just enough to fit the budget, unless that would leave the
+    design too small to fill `inner` from 4x: then the real pixels are worth more than the
+    model's sharpening, and the model is skipped."""
+    shrink = (MODEL_MAX_PX / (src[0] * src[1] * UPSCALE ** 2)) ** 0.5
+    if shrink >= 1.0:
+        return 1.0
+    need = min(inner[0] / content[0], inner[1] / content[1])
+    if need <= MODEL_MIN_GROW or need / shrink > UPSCALE:
+        return None
+    return shrink
+
+
+def enlarge(img: Image.Image, shrink: float | None, model: str) -> Image.Image:
+    """Carry out upscale_plan: the image as is, or shrunk by `shrink` and then through the model."""
+    if shrink is None:
+        return img
+    if shrink < 1.0:
+        img = img.resize((round(img.width * shrink), round(img.height * shrink)), Image.Resampling.LANCZOS)
+    return upscale(img, model=model)
 
 
 def tighten_alpha(img: Image.Image, lo: int = 96, hi: int = 160) -> Image.Image:
@@ -1324,6 +1358,22 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     style = detect_style(style_src or cut) if args.style == "auto" else args.style
     colors = args.colors if args.colors is not None else (12 if args.vector else 0)
     model = UPSCALE_MODEL[style]
+    # Đường key phóng cả ảnh gốc rồi mới cắt; đường cắt hình phóng thẳng phần đã cắt.
+    grow_src = original.size if bg not in ("ai", "none") else cut.size
+    shrink = upscale_plan(grow_src, cut.size, inner)
+    need = min(inner[0] / cut.width, inner[1] / cut.height)
+    if args.vector:
+        grow_txt = ""
+    elif shrink is None:
+        grow_txt = " | phóng: Lanczos, ảnh gốc đủ lớn"
+        if need > MODEL_MIN_GROW:
+            grow_txt = " | phóng: Lanczos, ảnh gốc quá lớn cho model"
+            times = f"{need:.1f}".replace(".", ",")
+            warn(f"CẢNH BÁO hình nhỏ trong ảnh gốc lớn: hình chỉ {cut.width}x{cut.height} px trong ảnh "
+                 f"{original.width}x{original.height}, phải phóng {times} lần bằng Lanczos vì ảnh quá lớn "
+                 f"để qua model upscale; viền có thể mềm. Cắt sát hình trước khi đưa vào để dùng model.")
+    else:
+        grow_txt = " | phóng: model x4" + (f", thu ảnh gốc còn {shrink:.0%}" if shrink < 1.0 else "")
 
     if args.vector:
         q = quantize(cut, colors, binary_alpha=True, merge_delta_e=args.merge)
@@ -1333,13 +1383,13 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         trace_svg(q_path, svg_path)
         result = render_svg(svg_path, inner)
     elif bg in ("ai", "none"):
-        big = upscale(cut, model=model)
+        big = enlarge(cut, shrink, model)
         big = big.resize(fit_box(*big.size, inner), Image.Resampling.LANCZOS)
         result = flatten_raster(big, colors, args.merge) if colors else tighten_alpha(big)
     else:
         # keyed background: upscale the flat RGB first (cleaner edges, denoised background),
-        # key at full resolution, then crop
-        big_rgb = upscale(original.convert("RGB"), model=model)
+        # key at full resolution, then crop. A source that is already big enough is keyed as is.
+        big_rgb = enlarge(original.convert("RGB"), shrink, model)
         keyed = key_bg(big_rgb, bg, args.floor)
         if silhouette:
             # Chốt chặn đo lại trên chính bản sẽ in. Ở ảnh gốc, nhiễu hạt đẩy vùng tối lên trên
@@ -1367,7 +1417,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     shirt_txt = "" if bg == "none" else f" | áo: {SHIRT_LABEL['same' if bg != 'ai' else 'other']}"
     place_txt = "" if args.place == "center" and args.scale == 100.0 else f" | đặt: {args.place} {args.scale:g}%"
     place_txt += "" if args.ink.lower() in ("", "none") else f" | mực: {args.ink}"
-    print(f"  nền: {kind}{shirt_txt} | cách: {how} | kiểu: {style} | {'vector' if args.vector else 'raster'}{place_txt}"
+    print(f"  nền: {kind}{shirt_txt} | cách: {how} | kiểu: {style}{grow_txt} | {'vector' if args.vector else 'raster'}{place_txt}"
           f"{f', gom {colors} màu' if colors else ', giữ nguyên màu'}")
 
     result = place_on_canvas(result, box, args.place, args.margin)

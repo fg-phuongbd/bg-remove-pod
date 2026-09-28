@@ -665,3 +665,71 @@ def test_fill_holes_covers_a_dark_figure_by_default(dirs, monkeypatch, capsys):
     v = pipeline.print_verdict(rep)
     assert v["muc"] == "dat", v                                  # cố ý tô đặc thì không phải lỗi
     assert any("tô đặc" in w for w in v.get("info", [])), v      # nhưng vẫn nói cho biết
+
+
+def test_upscale_plan_skips_the_model_when_the_source_is_already_big_enough():
+    """Ảnh 4K chỉ cần phóng khoảng 1,1 lần cho khung 4500 x 5100. Qua model 4 lần thì ra ảnh 16384 px,
+    Pillow từ chối mở và máy hết RAM; Lanczos từ chi tiết thật là đủ."""
+    plan = pipeline.upscale_plan
+    inner = (4410, 5000)
+    assert plan((4096, 4096), (3900, 4000), inner) is None       # phóng 1,25 lần: không cần model
+    assert plan((4096, 4096), (2300, 2600), inner) is None       # phóng 1,9 lần: vẫn dưới ngưỡng 2
+    s = plan((3840, 2160), (2100, 2100), inner)                   # 4K màn hình, hình vuông: cần 2,1 lần
+    assert s is not None and (3840 * 2160 * s * s * 16) <= pipeline.MODEL_MAX_PX * 1.001  # qua model, đã thu
+    assert plan((1254, 1254), (1100, 1200), inner) == 1.0        # ảnh ChatGPT: model như cũ, không thu
+
+
+def test_upscale_plan_keeps_the_model_for_a_small_placement_of_a_normal_source():
+    """chest-left chỉ cần ảnh 1254 px phóng 1,1 lần, nhưng model vẫn làm mép và mảng mực đặc hơn:
+    bỏ model thì mực đặc từ 72% xuống 50%, phủ thấp từ 10% lên 15% trên ảnh thật."""
+    assert pipeline.upscale_plan((1254, 1254), (1100, 1200), (1170, 1326)) == 1.0
+    assert pipeline.upscale_plan((1024, 1536), (900, 1400), (900, 1020)) == 1.0      # back-neck, co nhỏ
+
+
+def test_upscale_plan_shrinks_a_mid_size_source_so_the_model_output_fits_in_memory():
+    plan = pipeline.upscale_plan
+    inner = (4410, 5000)
+    s = plan((2048, 2048), (2000, 2000), inner)                  # cần 2,2 lần, 4 lần thì 67 triệu pixel
+    assert s is not None and s < 1
+    assert (2048 * s * pipeline.UPSCALE) ** 2 <= pipeline.MODEL_MAX_PX * 1.001   # làm tròn số thực
+    assert 2000 * s * pipeline.UPSCALE >= 4410                   # thu rồi vẫn đủ lấp khung, không kéo giãn
+
+
+def test_upscale_plan_prefers_lanczos_over_shrinking_away_real_detail():
+    """Hình nhỏ trong ảnh gốc lớn: thu ảnh cho vừa model sẽ bỏ chi tiết thật rồi kéo giãn lại."""
+    assert pipeline.upscale_plan((4096, 4096), (1200, 1200), (4410, 5000)) is None
+
+
+def test_a_big_source_never_reaches_the_model(dirs, monkeypatch, capsys):
+    def boom(*a, **k):
+        raise AssertionError("ảnh gốc đủ lớn thì không được đi qua model upscale")
+    monkeypatch.setattr(pipeline, "upscale", boom)
+    monkeypatch.setattr(pipeline, "MODEL_MAX_PX", 16 * 300 * 300)   # 400 px coi như "quá lớn cho model"
+    art = Image.new("RGB", (400, 400), (0, 0, 0))
+    art.paste((240, 40, 40), (20, 20, 380, 380))
+    src = dirs / "input" / "big.png"
+    art.save(src)
+
+    assert pipeline.main(["--size", "600x600", "--keep-input", str(src)]) == 0   # phóng chưa tới 2 lần
+    out = Image.open(dirs / "output" / "big_600x600_center.png")
+    assert out.size == (600, 600)
+    assert np.asarray(out)[300, 300, 3] == 255
+    assert "phóng: Lanczos" in capsys.readouterr().out
+
+
+def test_a_mid_size_source_is_shrunk_before_the_model(dirs, monkeypatch):
+    seen = []
+
+    def fake(img, scale=4, model=""):
+        seen.append(img.size)
+        return img.resize((img.width * scale, img.height * scale))
+    monkeypatch.setattr(pipeline, "upscale", fake)
+    monkeypatch.setattr(pipeline, "MODEL_MAX_PX", 16 * 150 * 150)   # ngân sách nhỏ cho test nhanh
+    art = Image.new("RGB", (200, 200), (0, 0, 0))
+    art.paste((240, 40, 40), (4, 4, 196, 196))
+    src = dirs / "input" / "mid.png"
+    art.save(src)
+
+    assert pipeline.main(["--size", "500x500", "--keep-input", str(src)]) == 0
+    assert seen and seen[0][0] <= 150, seen                         # vào model đã thu
+    assert Image.open(dirs / "output" / "mid_500x500_center.png").size == (500, 500)
