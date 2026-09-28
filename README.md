@@ -194,7 +194,7 @@ phẳng, viền cong mượt ở mọi kích cỡ.
 |---|---|---|
 | `flat` | chữ, logo, mảng màu đều | Real-ESRGAN model anime: mép sắc, không quầng |
 | `detail` | ảnh chụp, tranh có gradient và texture mịn | Real-ESRGAN model x4plus: giữ chất liệu, hơi làm mượt |
-| `grain` | halftone, chấm bi, vệt bắn, hạt sờn | **Lanczos thường**, không cho model bịa chi tiết |
+| `grain` | halftone, chấm bi, vệt bắn, hạt sờn | **Lanczos thường**, không cho model bịa chi tiết, rồi **làm cứng chấm** |
 
 Kiểu `grain` có vì một lý do cụ thể. Cả hai model Real-ESRGAN đều coi chấm bi halftone là nhiễu cần
 "sửa": model x4plus biến chấm thành vệt lông xù, model anime biến thành mảng nứt vỡ. Lanczos thường
@@ -205,10 +205,39 @@ cố ý: ảnh chụp người tối key trên nền đen có da và tóc ở al
 hàng nghìn đốm và bị coi là hạt. Dòng log in `kiểu: grain`; ép tay bằng `--style grain` nếu nhận
 diện sai.
 
-Đổi lại, chấm bi qua Lanczos mềm hơn chấm bi bị model "sửa" thành khối: trên poster sọ halftone,
-mực đặc giảm từ 50% xuống 26% và phủ thấp tăng từ 16% lên 21%. Con số xấu hơn nhưng ảnh đúng hơn,
-vì phần "đặc" cũ là vệt lông xù model bịa ra. Với DTF, kết hợp `--dtf-safe` để chấm bi đủ to mà bám:
-cùng tấm đó, nét mảnh từ 8,5% về 0, đốm nhỏ từ 2,5% về 0,9%, phủ thấp về lại 16%.
+### Làm cứng chấm
+
+Lanczos giữ chấm là chấm nhưng làm mép chấm thành một dốc mờ dài vài pixel. Với DTF, dốc đó là mực
+dưới 40% độ phủ, dễ bong: một poster lên tới 28% diện tích mực như vậy. Nên sau Lanczos, ảnh `grain`
+được **làm cứng chấm**, như thợ in lụa làm tay:
+
+- Mép thật của chấm nằm ở đường **một nửa độ đậm của chính chấm đó**. Mỗi pixel được so với chỗ
+  đậm nhất quanh nó, trong bán kính khoảng 1,4 pixel ảnh gốc: dưới một nửa thì bỏ, trên thì thành
+  mực, chuyển tiếp mượt 1 px để không răng cưa.
+- Mép được nâng lên bằng **độ đậm điển hình của ruột chấm** quanh đó, không bằng pixel sáng nhất.
+  Lanczos vọt lên sát mép (ruột 215, chỗ vọt 240); lấy chỗ vọt làm mức thì mọi hình bị một đường
+  viền sáng quanh mép.
+- Mỗi pixel **giữ màu của chính nó**. Chép màu từ pixel ruột gần nhất biến vùng phun sơn thành các
+  ô màu phẳng.
+- Chấm mờ vẫn mờ, ruột chấm không đổi, glow trải rộng gần như không đổi.
+
+Chỉ chạy khi ảnh `grain` thật sự được **phóng to**; in nhỏ hơn ảnh gốc (sau gáy) thì không có dốc mờ
+nào để làm. Dòng log ghi `phóng: model x4, chấm cứng`. Đo trên 7 file thật (6 poster và một ảnh cầu
+thủ có vệt bắn), 20 file khác trong lô ra giống hệt từng pixel:
+
+| Ảnh gốc | phủ thấp: ESRGAN cũ | Lanczos | chấm cứng |
+|---|---|---|---|
+| `Sep 4, 05_53_08 PM` (poster cá sấu) | 9,6% | 28,1% | 7,7% |
+| `Sep 4, 05_54_05 PM` (poster) | 9,2% | 23,5% | 6,3% |
+| `Sep 4, 04_28_47 PM` (poster halftone) | 15,7% | 21,2% | 6,3% |
+| `Sep 11, 10_24_15 AM` (poster xe tải) | 14,3% | 18,9% | 6,0% |
+| `Sep 9, 10_26_07 AM` (vệt bắn, chữ tay) | 4,4% | 14,3% | 3,0% |
+| `Sep 7, 09_34_26 AM` (poster tour) | 2,2% | 2,7% | 0,7% |
+| `Sep 18, 02_12_12 PM` (cầu thủ + vệt bắn) | 9,0% | 9,0% | 2,6% |
+
+Nét mảnh và đốm nhỏ cũng giảm theo (poster cá sấu: nét mảnh 15,9% với ESRGAN, 9,9% với Lanczos, 8,0%
+khi làm cứng), độ sáng tổng thể lệch dưới 2,5%. Poster nào vẫn trên 5% phủ thấp thì kết hợp
+`--dtf-safe`, hoặc in thử một chiếc rồi giặt.
 
 ## Các tùy chọn
 

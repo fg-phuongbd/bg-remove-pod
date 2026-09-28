@@ -733,3 +733,44 @@ def test_a_mid_size_source_is_shrunk_before_the_model(dirs, monkeypatch):
     assert pipeline.main(["--size", "500x500", "--keep-input", str(src)]) == 0
     assert seen and seen[0][0] <= 150, seen                         # vào model đã thu
     assert Image.open(dirs / "output" / "mid_500x500_center.png").size == (500, 500)
+
+
+def _halftone_on_black(path, size=240):
+    from PIL import ImageDraw
+    im = Image.new("RGB", (size, size), (0, 0, 0))
+    d = ImageDraw.Draw(im)
+    for y in range(30, size - 30, 6):                 # chừa lề: viền ảnh phải là nền để nhận diện được
+        for x in range(30, size - 30, 6):
+            d.ellipse((x - 2, y - 2, x + 2, y + 2), fill=(240, 240, 240))
+    im.save(path)
+
+
+def test_grain_art_gets_hard_dots_when_it_is_enlarged(dirs, monkeypatch, capsys):
+    calls = []
+    real = pipeline.harden_dots
+    monkeypatch.setattr(pipeline, "harden_dots", lambda img, grow: (calls.append(grow), real(img, grow))[1])
+    monkeypatch.setattr(pipeline, "upscale",
+                        lambda img, scale=4, model="": img.resize((img.width * scale, img.height * scale), Image.Resampling.LANCZOS))
+    src = dirs / "input" / "cham.png"
+    _halftone_on_black(src)
+    assert pipeline.main(["--size", "960x960", "--keep-input", str(src)]) == 0
+    assert "kiểu: grain" in capsys.readouterr().out
+    assert len(calls) == 1 and calls[0] > 3              # phóng khoảng 4 lần
+    a = np.asarray(Image.open(dirs / "output" / "cham_960x960_center.png"))[..., 3]
+    ink = a > 8
+    assert (a[ink] < pipeline.DTF_COVERAGE).mean() < 0.10  # chấm đặc, không còn dải mờ dày
+
+
+def test_hard_dots_are_only_for_enlarged_grain_art(dirs, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(pipeline, "harden_dots", lambda img, grow: (calls.append(grow), img)[1])
+    src = dirs / "input" / "cham.png"
+    _halftone_on_black(src, size=600)
+    assert pipeline.main(["--size", "300x300", "--keep-input", str(src)]) == 0   # thu nhỏ: không có dốc mờ
+    assert "kiểu: grain" in capsys.readouterr().out
+    assert calls == []
+    flat = dirs / "input" / "phang.png"
+    art = Image.new("RGB", (200, 200), (0, 0, 0)); art.paste((240, 40, 40), (40, 40, 160, 160)); art.save(flat)
+    assert pipeline.main(["--size", "800x800", "--keep-input", str(flat)]) == 0
+    assert "kiểu: grain" not in capsys.readouterr().out
+    assert calls == []                                    # đồ họa phẳng không đổi

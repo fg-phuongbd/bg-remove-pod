@@ -80,3 +80,78 @@ def test_is_grainy_ignores_noise_around_half_alpha_in_a_dark_photo():
     a[40:260, 60:240, 3] = rng.normal(120, 20, (220, 180)).clip(0, 255)     # da tối, alpha quanh 128
     assert pipeline.is_grainy(Image.fromarray(a, "RGBA")) is False
     assert pipeline.is_grainy(_halftone()) is True                          # halftone thật vẫn là hạt
+
+
+def _blurred_dot(peak, color=(200, 50, 50), rim_color=None, size=80, radius=12, blur=2.0):
+    """Một chấm mực sau khi Lanczos phóng khoảng 3,6 lần: ruột đậm, mép là dốc mờ dài vài pixel."""
+    import numpy as np
+    from PIL import ImageDraw, ImageFilter
+    m = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(m).ellipse((size / 2 - radius, size / 2 - radius, size / 2 + radius, size / 2 + radius), fill=255)
+    a = np.asarray(m.filter(ImageFilter.GaussianBlur(blur))).astype(np.float32) * peak / 255
+    rgba = np.zeros((size, size, 4), np.uint8)
+    rgba[..., :3] = color
+    if rim_color is not None:
+        rgba[a < peak * 0.9, :3] = rim_color      # màu đã chia ngược alpha ở mép: màu thuần, sáng hơn ruột
+    rgba[..., 3] = a.round().astype(np.uint8)
+    return Image.fromarray(rgba, "RGBA")
+
+
+def test_harden_dots_gives_a_blurred_dot_a_crisp_edge_at_half_its_peak():
+    import numpy as np
+    dot = _blurred_dot(255)
+    out = np.asarray(pipeline.harden_dots(dot, 3.6))[..., 3].astype(int)
+    a = np.asarray(dot)[..., 3].astype(int)
+    soft = lambda x: int(((x > 8) & (x < 247)).sum())
+    assert soft(out) < soft(a) / 3                      # dải mờ mỏng đi hẳn
+    assert out[40, 40] == a[40, 40]                     # ruột giữ nguyên
+    assert out[a < 0.35 * 255].max() == 0               # chân mờ dưới một nửa bị cắt
+    area = int((out > 127).sum()); contour = int((a > 127).sum())
+    assert abs(area - contour) <= 0.1 * contour         # mép nằm ở đường một nửa độ đậm
+
+
+def test_harden_dots_keeps_a_dim_dot_dim():
+    """Chấm mờ vẫn là chấm mờ: đỉnh 100 không bị xóa, cũng không bị nâng lên đặc."""
+    import numpy as np
+    out = np.asarray(pipeline.harden_dots(_blurred_dot(100), 3.6))[..., 3]
+    assert 95 <= out.max() <= 100
+    assert (out > 50).sum() > 300
+
+
+def test_harden_dots_keeps_every_pixels_own_color():
+    """Chép màu từ pixel ruột gần nhất biến vùng phun sơn thưa thành các ô màu phẳng."""
+    import numpy as np
+    dot = _blurred_dot(255, rim_color=(255, 255, 255))
+    out = np.asarray(pipeline.harden_dots(dot, 3.6))
+    assert (out[..., :3] == np.asarray(dot)[..., :3]).all()
+
+
+def _lanczos_disk(alpha=215, r_src=14, n=40, grow=3.6):
+    """Một mảng mực mép sắc ở ảnh gốc, phóng bằng Lanczos: sát mép có dải vọt cao hơn ruột."""
+    from PIL import ImageDraw
+    s = Image.new("RGBA", (n, n), (200, 50, 50, 0)); c = n / 2
+    ImageDraw.Draw(s).ellipse((c - r_src, c - r_src, c + r_src, c + r_src), fill=(200, 50, 50, alpha))
+    return s.resize((round(n * grow),) * 2, Image.Resampling.LANCZOS)
+
+
+def test_harden_dots_does_not_ring_a_shape_with_a_bright_edge():
+    """Lanczos vọt lên tới 240 sát mép một mảng 215. Lấy chỗ vọt làm đỉnh rồi nâng cả dải mép lên
+    đó thì mép sáng hơn ruột thành một đường viền (từng ra 252). Mép chỉ được lên tới mức ruột."""
+    import numpy as np
+    big = _lanczos_disk()
+    a = np.asarray(big)[..., 3].astype(int)
+    out = np.asarray(pipeline.harden_dots(big, 3.6))[..., 3].astype(int)
+    ramp = (a > 20) & (a < 200)                          # dải dốc mờ của mép
+    raised = ramp & (out > a)
+    assert raised.sum() > 50                             # mép có được làm cứng
+    assert out[raised].mean() <= 215 + 10
+
+
+def test_harden_dots_leaves_a_wide_glow_alone():
+    """Glow trải dài hàng trăm pixel không phải mép mờ do phóng to."""
+    import numpy as np
+    ramp = np.tile(np.linspace(255, 0, 400), (40, 1))
+    rgba = np.zeros((40, 400, 4), np.uint8); rgba[..., :3] = 240; rgba[..., 3] = ramp.round()
+    out = np.asarray(pipeline.harden_dots(Image.fromarray(rgba, "RGBA"), 3.6))[..., 3].astype(int)
+    body = ramp > 40                                    # bỏ phần đuôi rất mờ
+    assert np.abs(out - rgba[..., 3].astype(int))[body].mean() < 2

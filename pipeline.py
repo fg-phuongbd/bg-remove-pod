@@ -496,6 +496,51 @@ def tighten_alpha(img: Image.Image, lo: int = 96, hi: int = 160) -> Image.Image:
     return Image.fromarray(rgba, "RGBA")
 
 
+def _smoothstep(x: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    t = np.clip((x - lo) / (hi - lo), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def harden_dots(img: Image.Image, grow: float) -> Image.Image:
+    """Give halftone dots and splatter back the hard edge that Lanczos smeared, for DTF.
+
+    Enlarging `grow` times turns every dot's edge into a ramp about `grow` px long, which prints
+    as ink under 40% coverage: 28% of the ink on a halftone poster, against 10% when Real-ESRGAN
+    painted the dots over. The dot's true edge is where the ramp crosses half of the dot's own
+    peak, so each pixel is compared with the densest alpha within 1.4 source pixels, taken on an
+    alpha blurred by half a source pixel so that Lanczos's own overshoot beside the edge does not
+    count as the peak. Below 40% of it the skirt is cut, above 60% it is ink, with a smooth step
+    between for anti-aliasing.
+
+    What the edge is raised to is the typical alpha of the dot's inside around it (the pixels
+    within 95% of the peak, averaged with a Gaussian, capped at the peak), never the brightest
+    pixel: that is the overshoot or a speck, and raising the edge to it paints a light ring round
+    every shape (a 215 disk got a 252 rim that way). Averaged rather than copied from the nearest
+    inside pixel, which turns sparse spray into flat cells. Every pixel keeps its own color, alpha is never lowered inside a dot,
+    dim dots stay dim, and a glow whose ramp is far longer than the window barely changes.
+    Measured on real files: low coverage 28% to 7% on a halftone poster, 9% to 2% on a player
+    photo with splatter, overall brightness within 1.5%."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    rgba = np.asarray(img.convert("RGBA")).copy()
+    a = rgba[:, :, 3].astype(np.float32)
+    r = max(2, round(1.4 * grow))
+    # Đỉnh lấy trên alpha đã làm mịn nửa pixel gốc: Lanczos vọt lên sát mép (ruột 215, dải vọt
+    # 240), và lấy dải vọt làm đỉnh thì cả mép bị nâng lên trên ruột thành một đường viền sáng.
+    peak = ndimage.maximum_filter(ndimage.gaussian_filter(a, grow / 2), size=2 * r + 1)
+    ratio = a / np.maximum(peak, 1.0)
+    inside = ((ratio >= 0.95) & (a > 0)).astype(np.float32)
+    weight = ndimage.gaussian_filter(inside, r / 2)
+    level = np.where(weight > 1e-3, ndimage.gaussian_filter(a * inside, r / 2) / np.maximum(weight, 1e-3), peak)
+    level = np.minimum(level, peak)
+    t = _smoothstep(ratio, 0.4, 0.6)
+    edge = (inside == 0) & (t > 0)
+    alpha = np.where(inside > 0, a, 0.0)
+    alpha[edge] = t[edge] * np.maximum(a[edge], level[edge])
+    rgba[:, :, 3] = alpha.clip(0, 255).round().astype(np.uint8)
+    return Image.fromarray(rgba, "RGBA")
+
+
 def flatten_raster(img: Image.Image, colors: int, merge_delta_e: float = MERGE_DELTA_E) -> Image.Image:
     """Tighten alpha, then quantize (includes median denoise) keeping the thin soft edge."""
     return quantize(tighten_alpha(img), colors, binary_alpha=False, merge_delta_e=merge_delta_e)
@@ -1409,6 +1454,12 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         result = keyed.resize(fit_box(*keyed.size, inner), Image.Resampling.LANCZOS)
         if colors:
             result = flatten_raster(result, colors, args.merge)
+    # Halftone phóng bằng Lanczos thì mép chấm thành dốc mờ, in DTF dễ bong. Chỉ khi thật sự phóng
+    # to: thu nhỏ (in sau gáy) không tạo dốc nào.
+    enlarged = result.width / cut.width
+    if style == "grain" and not args.vector and enlarged > 1:
+        result = harden_dots(result, enlarged)
+        grow_txt += ", chấm cứng"
 
     how = {"none": "đã trong suốt", "ai": "cắt hình" + (" + tinh chỉnh viền" if refine else ""),
            "black": "key nền đen", "white": "key nền trắng",
