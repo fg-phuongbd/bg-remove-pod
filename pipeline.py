@@ -1677,6 +1677,10 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
              and (figure is not None or silhouette is not None) and photo_model_ready())
     if photo:
         grow_txt += f", người: {PHOTO_MODEL}"
+    elif (style == "detail" and not args.vector and shrink is not None and args.fill_holes
+          and (figure is not None or silhouette is not None) and REALESRGAN_BIN.exists()):
+        warn(f"THIẾU MODEL {PHOTO_MODEL}: thân người phóng bằng x4plus, da sẽ mịn như sáp. Chạy lại "
+             f"./setup.sh để tải model (máy vừa pull code mới thường gặp trường hợp này), rồi chạy lại ảnh.")
 
     if args.vector:
         q = quantize(cut, colors, binary_alpha=True, merge_delta_e=args.merge)

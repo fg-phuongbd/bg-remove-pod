@@ -901,3 +901,17 @@ def test_figure_uses_the_photo_model_and_the_rest_keeps_the_sharp_one(dirs, monk
     text = o[o.shape[0] // 2, x0 + int(w * 0.85)]           # giữa khối chữ
     assert body[2] > 150 and body[0] < 100, body             # người: model ảnh chụp (xanh)
     assert text[0] > 150 and text[2] < 100, text             # chữ: model sắc nét (đỏ)
+
+
+def test_a_missing_photo_model_says_to_run_setup(dirs, monkeypatch):
+    """Máy vừa pull code mới mà chưa chạy lại ./setup.sh: không có model ảnh chụp. Vẫn chạy được bằng
+    x4plus, nhưng phải nói ra để người dùng biết chạy ./setup.sh, không âm thầm in kém hơn."""
+    src = dirs / "input" / "nguoi.png"
+    mask = _photo_with_figure(src)
+    monkeypatch.setattr(pipeline, "remove_bg", lambda img: Image.merge("RGBA", (*img.convert("RGB").split(), mask.resize(img.size))))
+    monkeypatch.setattr(pipeline, "photo_model_ready", lambda: False)
+    monkeypatch.setattr(pipeline, "REALESRGAN_BIN", dirs / "co-binary")
+    (dirs / "co-binary").write_text("")
+    assert pipeline.main(["--size", "600x480", "--keep-input", "--fill-holes", "--style", "detail", str(src)]) == 0
+    notes = pipeline.read_meta(next((dirs / "output").glob("nguoi_*.png")))["notes"]
+    assert any("./setup.sh" in n for n in notes), notes

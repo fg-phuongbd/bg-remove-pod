@@ -16,6 +16,20 @@ Cần Homebrew. Script cài `uv` và `resvg`, tạo môi trường Python riêng
 tải Real-ESRGAN cho chế độ raster. Lần chạy đầu tiên sẽ tải thêm model tách nền BiRefNet (~900 MB)
 về `~/.rembg/models/`.
 
+### Sau mỗi lần `git pull`: chạy lại `./setup.sh`
+
+Code có thể cần thêm model hay công cụ mới mà git không mang theo: `bin/` (Real-ESRGAN và các model
+của nó) nằm ngoài git vì quá nặng. Sau khi pull code về, nhất là trên một máy khác, chạy lại:
+
+```bash
+git pull
+./setup.sh
+```
+
+Chạy lại bao nhiêu lần cũng an toàn: thứ đã có thì bỏ qua (`đã có`), chỉ tải thứ còn thiếu. Ví dụ model
+ảnh chụp `4xLSDIRplusC` cho thân người được thêm sau Real-ESRGAN; máy cài từ trước chưa có nó. Thiếu
+model thì app vẫn chạy, nhưng lần chạy báo `THIẾU MODEL … Chạy lại ./setup.sh` và in kém hơn.
+
 ## Dùng hằng ngày
 
 1. Thả ảnh (png, jpg, webp) vào `input/`, hoặc kéo thẳng vào trang `./run.sh --ui`.
