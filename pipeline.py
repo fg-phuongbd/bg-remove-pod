@@ -1,4 +1,4 @@
-"""tshirt-pipeline: ảnh thiết kế AI -> file in PNG nền trong suốt, 300 DPI.
+"""Clearcut: ảnh thiết kế AI -> file in PNG nền trong suốt, 300 DPI.
 
 Mặc định là raster: tách nền (key theo màu nền, hoặc cắt hình bằng model khi in lên áo khác
 màu), upscale 4 lần bằng Real-ESRGAN (Lanczos khi không có), đặt lên khung in. `--vector` gom
@@ -35,7 +35,7 @@ MODEL_MIN_GROW = 2.0  # chỉ cần phóng tới mức này thì ảnh gốc đ�
 # Ảnh ra khỏi model tối đa bao nhiêu pixel. Các bước sau tốn khoảng 130 byte mỗi pixel: ảnh ChatGPT
 # 1254 px ra 25 triệu pixel (~3 GB), còn ảnh 3840x2160 qua model 4 lần ra 132 triệu (17 GB, hết RAM).
 MODEL_MAX_PX = 40_000_000
-DEFAULT_SIZE = "4500x5100"  # px; Printful/Merch-style print file (38.1 x 43.2 cm at 300 DPI)
+DEFAULT_SIZE = "4500x5400"  # px; print file 38.1 x 45.7 cm at 300 DPI
 REMBG_MODEL = "birefnet-general"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 DTF_COVERAGE = 102  # dưới 40% độ phủ: vùng nhận ít bột keo khi in DTF, dễ bong sau vài lần giặt
@@ -47,6 +47,10 @@ SPECK_WARN = 1.0  # cảnh báo khi quá ngần này phần trăm mực là đ�
 # quần đen trên áo đen (ảnh đen trắng thêm tới 33%). Ai lo bật nhầm cho poster thì đặt 20: ba ảnh
 # người màu thêm 8-12%, ba poster thêm 27-60%.
 FILL_LIMIT = 100.0
+# Gợi ý bật thân hình đặc khi một ảnh chụp, key xong, thủng quá ngần này phần trăm thân hình. Đo trên
+# 7 ảnh: cầu thủ trên nền đen thủng 16%, logo phẳng 1%; poster halftone thủng 35-56% nhưng đã bị
+# loại từ trước vì kiểu "grain", và tô đặc poster là sai.
+SEE_THROUGH_HINT = 8.0
 SOLID_SHARE = 0.5  # share of same-colored neighbours that makes a pixel part of a flat area
 KEY_FLOOR = 32.0  # default for --floor: colors closer than this to the background are shirt, not ink
 MERGE_DELTA_E = 12.0  # default for --merge: palette colors closer than this (CIELAB) are always merged
@@ -792,6 +796,23 @@ def redundant_ink(keyed: Image.Image, original: Image.Image, bg: tuple[int, int,
     return 100.0 * float(wasted.sum()) / float(ink.sum())
 
 
+def see_through(keyed: Image.Image) -> float:
+    """Phần trăm thân hình bị key làm xuyên thấu (alpha dưới 128), trên toàn bộ thân hình.
+
+    Thân hình là vùng mực rõ (alpha trên 64) lấp kín lỗ: không cần model cắt hình, nên đo được
+    cả khi chưa bật --fill-holes. Ảnh chụp người trên nền cùng màu áo thủng ở áo tối, bóng đổ,
+    tóc; đó là chỗ thân hình đặc vá lại."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    im = keyed.convert("RGBA")
+    im.thumbnail((512, 512))
+    a = np.asarray(im)[:, :, 3]
+    body = ndimage.binary_fill_holes(ndimage.binary_closing(a > 64, iterations=3))
+    if not body.any():
+        return 0.0
+    return 100.0 * float((body & (a < 128)).sum()) / float(body.sum())
+
+
 def solid_core(keyed: Image.Image, original: Image.Image, silhouette: Image.Image,
                bg: tuple[int, int, int], band: float = 0.001, thin: float = 0.006,
                floor: float = 0.0) -> Image.Image:
@@ -1397,6 +1418,11 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
                 keyed = filled
                 filled_in = True
         cut = crop_to_content(keyed, min_alpha=40)
+        if not args.fill_holes and not args.vector and not is_flat_art(original) \
+                and detect_style(cut) == "detail" and (holes := see_through(keyed)) > SEE_THROUGH_HINT:
+            warn(f"GỢI Ý thân hình đặc: đây có vẻ là ảnh chụp người/nhân vật, và {holes:.0f}% thân hình bị "
+                 f"key xuyên thấu (áo tối, bóng đổ, tóc trùng màu áo). Bật thân hình đặc (--fill-holes) "
+                 f"rồi chạy lại để in thân người thành một khối liền. Poster, logo thì bỏ qua gợi ý này.")
         shirt = {"black": (20, 20, 22), "white": (245, 245, 245)}.get(kind) or bg_color(original)
     cut.save(WORK_DIR / f"{src.stem}-cut.png")
 

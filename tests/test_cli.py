@@ -10,7 +10,7 @@ import pipeline
 
 def test_parse_args_defaults():
     a = pipeline.parse_args([])
-    assert a.vector is False and a.colors is None and a.size == "4500x5100" and a.bg == "auto" and a.style == "auto"
+    assert a.vector is False and a.colors is None and a.size == "4500x5400" and a.bg == "auto" and a.style == "auto"
     assert a.keep_input is False and a.files == []
 
 
@@ -774,3 +774,34 @@ def test_hard_dots_are_only_for_enlarged_grain_art(dirs, monkeypatch, capsys):
     assert pipeline.main(["--size", "800x800", "--keep-input", str(flat)]) == 0
     assert "kiểu: grain" not in capsys.readouterr().out
     assert calls == []                                    # đồ họa phẳng không đổi
+
+
+def _photo_on_black(path):
+    """Một 'ảnh chụp' người trên nền đen: thân sáng có nhiễu, giữa thân là áo tối gần màu nền."""
+    rng = np.random.default_rng(5)
+    a = rng.normal(14, 3, (240, 240, 3))
+    yy, xx = np.mgrid[:240, :240]
+    body = ((xx - 120) / 60) ** 2 + ((yy - 120) / 100) ** 2 < 1
+    shade = 170 + 50 * np.sin(xx / 9.0) * np.cos(yy / 13.0)
+    a[body] = (shade[body, None] + rng.normal(0, 12, (int(body.sum()), 3)))
+    a[(abs(xx - 120) < 35) & (abs(yy - 120) < 50)] = 22  # áo đen: key thủng phần này
+    Image.fromarray(a.clip(0, 255).astype(np.uint8), "RGB").save(path)
+
+
+def test_suggests_solid_body_for_a_photo_keyed_full_of_holes(dirs, capsys):
+    """Ảnh chụp người trên nền cùng màu áo mà chưa bật thân hình đặc: chỗ áo tối bị key thủng.
+    Trang phải gợi ý bật thân hình đặc; bật rồi hoặc ảnh phẳng (logo, chữ) thì im lặng."""
+    src = dirs / "input" / "cau_thu.png"
+    _photo_on_black(src)
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--bg", "black", str(src)]) == 0
+    notes = pipeline.read_meta(dirs / "output" / "cau_thu_240x240_center.png")["notes"]
+    assert any(n.startswith("GỢI Ý thân hình đặc") for n in notes), notes
+
+    src2 = dirs / "input" / "sach.png"
+    im = Image.new("RGB", (240, 240), (0, 0, 0))
+    im.paste((215, 8, 22), (60, 60, 180, 180))
+    im.paste((0, 0, 0), (100, 100, 140, 140))         # lỗ cố ý trong logo phẳng
+    im.save(src2)
+    assert pipeline.main(["--size", "240x240", "--keep-input", str(src2)]) == 0
+    notes = pipeline.read_meta(dirs / "output" / "sach_240x240_center.png")["notes"]
+    assert not any(n.startswith("GỢI Ý") for n in notes)

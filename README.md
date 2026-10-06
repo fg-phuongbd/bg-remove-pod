@@ -1,7 +1,7 @@
-# tshirt-pipeline
+# Clearcut
 
 Biến ảnh thiết kế do AI sinh (khoảng 1024–2048 px, nền đen, trắng hoặc trơn) thành file PNG nền
-trong suốt, 300 DPI, đúng kích thước file in (mặc định 4500 × 5100 px), sẵn sàng gửi xưởng in DTF/DTG.
+trong suốt, 300 DPI, đúng kích thước file in (mặc định 4500 × 5400 px), sẵn sàng gửi xưởng in DTF/DTG.
 
 Sửa các lỗi thường gặp của ảnh AI khi in: pixel lỗi khi phóng to, viền răng cưa, và với minh họa phẳng
 là mảng màu không đều. Thay bước tách nền tay trong Photoshop.
@@ -37,7 +37,7 @@ về `~/.rembg/models/`.
 
 3. Lấy kết quả:
 
-   - `output/<tên>_4500x5100_center.png`: file in, nền trong suốt, 300 DPI. Tên mang theo khung in
+   - `output/<tên>_4500x5400_center.png`: file in, nền trong suốt, 300 DPI. Tên mang theo khung in
      và vị trí, xem mục **Tên file in**.
    - `review/<cùng tên>.png`: ảnh gốc bên trái, kết quả bên phải **ghép trên màu áo sẽ in**.
    - Ảnh gốc chuyển sang `input/done/`, ảnh lỗi sang `input/failed/`.
@@ -91,7 +91,7 @@ và in ra dòng log cho biết nó chọn gì.
 Chín cờ hay dùng nằm trên thanh trên cùng, tám cờ còn lại trong khối `cờ nâng cao`. Danh sách và giá
 trị mặc định lấy thẳng từ `parse_args`, nên thêm cờ mới vào dòng lệnh là trang có ngay.
 
-**4. Chạy.** *Chạy ảnh đang chọn* làm một ảnh, *Chạy tất cả đang chờ* làm hết những ảnh chưa xử lý,
+**4. Chạy.** *Chạy ảnh này* làm một ảnh, *Chạy hàng chờ* làm hết những ảnh chưa xử lý,
 mỗi ảnh dùng cờ riêng của nó. Ô `cùng lúc` đặt số ảnh chạy song song, mặc định 2; đẩy lên 3 thì nhanh
 hơn rõ, cao hơn nữa thì máy đuối vì mỗi ảnh giữ vài mảng cỡ 5000 x 5000 trong bộ nhớ. Mỗi ảnh mất
 khoảng 14 giây, hoặc 45 giây nếu bật `thân hình đặc` vì phải chạy thêm model cắt hình.
@@ -161,7 +161,7 @@ ra đúng.
 ### Lấy file
 
 Nút **Tải file in** tải bản đầy đủ 300 DPI, tên mang theo khung in và vị trí, xem mục
-**Tên file in**. Khung 4500 x 5100 ở 300 DPI là 38,1 x 43,2 cm; đối chiếu với bàn in của xưởng trước
+**Tên file in**. Khung 4500 x 5400 ở 300 DPI là 38,1 x 45,7 cm; đối chiếu với bàn in của xưởng trước
 khi gửi.
 
 ## Một câu hỏi duy nhất: in lên áo màu gì?
@@ -246,7 +246,7 @@ Hằng ngày chỉ cần ba cờ:
 | Cờ | Mặc định | Khi nào dùng |
 |---|---|---|
 | `--shirt X` | same | `same` = áo cùng màu nền ảnh, `other` = áo khác màu, `auto` = nền đen coi là áo đen, còn lại áo khác màu. Xem bảng trên. |
-| `--size WxH` | 4500x5100 | Kích thước file in. Số ≥ 200 là pixel, nhỏ hơn là cm (`30x40`). |
+| `--size WxH` | 4500x5400 | Kích thước file in. Số ≥ 200 là pixel, nhỏ hơn là cm (`30x40`). |
 | `--preset X` | none | Vị trí in hay dùng, điền sẵn `--place` và `--scale`: `chest-left`, `chest-right`, `chest`, `back-neck`, `full`. Xem mục **Đặt hình nhỏ trên khung in**. |
 | `--vector` | tắt | Minh họa phẳng: gom 12 màu rồi trace vector. Không dùng cho tranh có gradient, texture, chữ rất nhỏ. |
 | `file1 file2 …` | | Chỉ xử lý các file này. |
@@ -383,7 +383,7 @@ trên lưng áo hay in ngực trái, dùng hai cờ này:
 ```
 
 `--scale` là phần trăm của **cả khung**, không phải của chiều rộng, nên con số có ý nghĩa như nhau
-với hình ngang hay hình dọc: 26% của khung 4500 x 5100 là hộp 1170 x 1326, hình ngang dùng hết chiều
+với hình ngang hay hình dọc: 26% của khung 4500 x 5400 là hộp 1170 x 1404, hình ngang dùng hết chiều
 rộng hộp đó còn hình dọc dùng hết chiều cao.
 
 `--margin` là khoảng hở từ mép khung, mặc định 2% cạnh ngắn, chỉ có tác dụng khi `--place` khác
@@ -434,11 +434,11 @@ khi mực thừa quá 20%, sai số quá 5, hoặc mực đặc dưới 50%.
 ## Tên file in
 
 ```
-tên-ảnh_khung-in_vị-trí.png       ->  skull_4500x5100_center.png
-tên-ảnh_khung-in_vị-trí_cỡ.png    ->  skull_4500x5100_top-right_26pc.png
-tên-ảnh_khung-in_vị-trí_mực.png   ->  skull_4500x5100_center_ink-black.png
-…_cutout / _fill / _vector        ->  skull_4500x5100_center_fill.png
-…_grain / _flat / _detail / _c8   ->  skull_4500x5100_center_grain.png
+tên-ảnh_khung-in_vị-trí.png       ->  skull_4500x5400_center.png
+tên-ảnh_khung-in_vị-trí_cỡ.png    ->  skull_4500x5400_top-right_26pc.png
+tên-ảnh_khung-in_vị-trí_mực.png   ->  skull_4500x5400_center_ink-black.png
+…_cutout / _fill / _vector        ->  skull_4500x5400_center_fill.png
+…_grain / _flat / _detail / _c8   ->  skull_4500x5400_center_grain.png
 ```
 
 Mặc định thì tên gọn. Mọi cờ làm **đổi bức ảnh** đều để một đuôi trong tên, theo thứ tự cố định:
@@ -472,7 +472,7 @@ nhỏ nhưng đậm. Đo trên một poster in thật: bỏ 1,7 triệu pixel, t
 sRGB phải có: RIP gặp file không gắn hồ sơ sẽ tự đoán không gian màu, và màu in ra lệch so với thứ
 bạn đã duyệt trên màn hình.
 
-Dòng log cũng in khổ thật bằng cm, ví dụ `4500x5100 px @ 300 DPI = 38,1 x 43,2 cm`, để đối chiếu với
+Dòng log cũng in khổ thật bằng cm, ví dụ `4500x5400 px @ 300 DPI = 38,1 x 45,7 cm`, để đối chiếu với
 bàn in của xưởng trước khi gửi.
 
 ## Cảnh báo cho in DTF
@@ -626,6 +626,6 @@ tests/          pytest
 docs/superpowers/   spec và kế hoạch triển khai
 ```
 
-`output/` và `review/` không được dọn tự động và lớn nhanh (một file in 4500 x 5100 nặng 5 đến
+`output/` và `review/` không được dọn tự động và lớn nhanh (một file in 4500 x 5400 nặng 5 đến
 30 MB). Xóa tay khi đã gửi xưởng; chạy lại từ `input/done/` bất cứ lúc nào cũng ra lại đúng file,
 vì cờ đã ghi trong file in và trang nhớ cờ theo từng ảnh.

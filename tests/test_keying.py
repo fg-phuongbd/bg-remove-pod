@@ -415,3 +415,13 @@ def test_fill_floor_and_guard_anchor_on_the_measured_background():
     full = pipeline.solid_core(keyed, im, silhouette, pipeline.bg_rgb(im, "black"))
     assert pipeline.redundant_ink(full, im, pipeline.bg_color(im)) > 40   # đo đúng nền: khối quần là mực trùng áo
     assert pipeline.redundant_ink(full, im, (0, 0, 0)) < 5              # đo sai nền (0,0,0) thì không thấy gì
+
+
+def test_see_through_counts_keyed_out_holes_inside_the_figure():
+    a = np.zeros((200, 200), np.uint8)
+    a[40:160, 40:160] = 255                       # thân hình đặc
+    solid = Image.fromarray(np.dstack([np.full((200, 200, 3), 200, np.uint8), a]), "RGBA")
+    assert pipeline.see_through(solid) < 1
+    a[70:130, 70:130] = 0                         # áo tối bị key thủng ở giữa thân: 25% thân hình
+    holed = Image.fromarray(np.dstack([np.full((200, 200, 3), 200, np.uint8), a]), "RGBA")
+    assert 20 < pipeline.see_through(holed) < 30
