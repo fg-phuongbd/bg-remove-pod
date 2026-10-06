@@ -856,3 +856,48 @@ def test_halftone_fade_flag_marks_the_file_and_explains_its_dots(dirs):
     v = pipeline.print_verdict(dict(rep, dom=5.0))
     assert not any("đốm rời" in w for w in v["why"])        # đốm là do bật chấm hóa: chỉ ghi nhận
     assert any("chấm halftone" in w for w in v["info"])
+
+
+def _photo_with_figure(path):
+    """Nền đen, 'chữ' trắng bên phải, 'người' (ellipse) bên trái; thân hình đặc sẽ hỏi model cắt hình."""
+    rng = np.random.default_rng(1)
+    a = rng.normal(14, 2, (240, 300, 3))
+    yy, xx = np.mgrid[:240, :300]
+    fig = ((xx - 90) / 60) ** 2 + ((yy - 120) / 100) ** 2 < 1
+    a[fig] = 150 + rng.normal(0, 25, (int(fig.sum()), 3))
+    a[40:200, 200:280] = 235
+    Image.fromarray(a.clip(0, 255).astype(np.uint8), "RGB").save(path)
+    m = Image.new("L", (300, 240), 0)
+    ImageDraw.Draw(m).ellipse((30, 20, 150, 220), fill=255)
+    return m
+
+
+@pytest.mark.parametrize("shirt", ["same", "other"])
+def test_figure_uses_the_photo_model_and_the_rest_keeps_the_sharp_one(dirs, monkeypatch, shirt):
+    """Ảnh có người (thân hình đặc bật), kiểu ảnh chụp: trong thân người dùng model ảnh chụp cho da tự
+    nhiên, phần còn lại (chữ đồ họa) giữ model sắc nét, vì model ảnh chụp làm vân chữ lốm đốm xám."""
+    src = dirs / "input" / "nguoi.png"
+    mask = _photo_with_figure(src)
+    monkeypatch.setattr(pipeline, "remove_bg", lambda img: Image.merge("RGBA", (*img.convert("RGB").split(), mask.resize(img.size))))
+    monkeypatch.setattr(pipeline, "photo_model_ready", lambda: True)
+    tint = {pipeline.PHOTO_MODEL: (0, 0, 255), "realesrgan-x4plus": (255, 0, 0)}
+
+    def fake_upscale(img, scale=4, model=""):
+        big = img.resize((img.width * scale, img.height * scale), Image.Resampling.NEAREST)
+        rgb = Image.new("RGB", big.size, tint.get(model, (0, 255, 0)))
+        if big.mode == "RGBA":
+            rgb.putalpha(big.getchannel("A"))
+            return rgb
+        return Image.composite(rgb, Image.new("RGB", big.size, (0, 0, 0)), big.convert("L").point(lambda v: 255 if v > 40 else 0))
+    monkeypatch.setattr(pipeline, "upscale", fake_upscale)
+    assert pipeline.main(["--size", "1200x960", "--keep-input", "--fill-holes", "--style", "detail",
+                          "--shirt", shirt, str(src)]) == 0
+    out = [p for p in (dirs / "output").glob("nguoi_*.png")][0]
+    o = np.asarray(Image.open(out).convert("RGBA")).astype(int)
+    ys, xs = np.nonzero(o[:, :, 3] > 200)
+    x0, x1 = xs.min(), xs.max()
+    w = x1 - x0
+    body = o[o.shape[0] // 2, x0 + int(w * 0.2)]            # giữa thân người
+    text = o[o.shape[0] // 2, x0 + int(w * 0.85)]           # giữa khối chữ
+    assert body[2] > 150 and body[0] < 100, body             # người: model ảnh chụp (xanh)
+    assert text[0] > 150 and text[2] < 100, text             # chữ: model sắc nét (đỏ)

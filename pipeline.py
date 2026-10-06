@@ -441,6 +441,33 @@ def render_svg(svg_path: Path, box: tuple[int, int]) -> Image.Image:
 
 # ---------------------------------------------------------------- raster
 UPSCALE_MODEL = {"flat": "realesrgan-x4plus-anime", "detail": "realesrgan-x4plus", "grain": "lanczos"}
+# Model ảnh chụp cho riêng thân người (thân hình đặc bật, kiểu detail). x4plus làm da mịn như sáp;
+# LSDIRplusC giữ vân da tự nhiên nhưng biến vân nứt của chữ đồ họa thành lốm đốm xám (trên ảnh cầu thủ,
+# mực đặc 52,7% -> 48,7%), nên chỉ dùng trong thân người, phần còn lại vẫn x4plus.
+PHOTO_MODEL = "4xLSDIRplusC"
+PHOTO_MODEL_URL = "https://raw.githubusercontent.com/upscayl/custom-models/main/models/"
+
+
+def photo_model_ready() -> bool:
+    return REALESRGAN_BIN.exists() and (BIN_DIR / "models" / f"{PHOTO_MODEL}.param").exists()
+
+
+def figure_blend(base: Image.Image, photo: Image.Image, figure: Image.Image, feather: int) -> Image.Image:
+    """Màu trong thân người lấy từ `photo`, ngoài thân giữ `base`; alpha luôn của `base`.
+
+    `figure` là mặt nạ thân người của model cắt hình, ở bất kỳ cỡ nào. Nó được co vào `feather` px
+    rồi làm mềm cũng chừng ấy, nên mép người và chữ sát người vẫn là bản sắc nét, chuyển dần vào
+    trong thân. Hình dạng và độ phủ không đổi, chỉ màu bên trong người đổi."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    m = np.asarray(figure.convert("L").resize(base.size, Image.Resampling.BILINEAR)) >= 128
+    m = ndimage.binary_erosion(m, iterations=feather)
+    w = ndimage.gaussian_filter(m.astype(np.float32), feather / 2)[:, :, None]
+    b = np.asarray(base).astype(np.float32)
+    ph = np.asarray(photo.convert(base.mode).resize(base.size, Image.Resampling.LANCZOS)).astype(np.float32)
+    out = b.copy()
+    out[:, :, :3] = b[:, :, :3] * (1 - w) + ph[:, :, :3] * w
+    return Image.fromarray(out.clip(0, 255).round().astype(np.uint8), base.mode)
 
 
 def bleed_edges(img: Image.Image) -> Image.Image:
@@ -1560,6 +1587,8 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     kind = detect_bg(original)
     bg, refine = choose_mode(args, kind)
     filled_in = False  # --fill-holes có thực sự được áp dụng không, để dòng log nói đúng
+    figure = None  # mặt nạ thân người (thân hình đặc bật), để dùng model ảnh chụp riêng trong thân
+    silhouette = None  # đường key: mặt nạ model cắt hình; None nếu không bật hoặc chốt chặn bỏ qua
     kept = None  # đường cắt hình: phần trăm thiết kế file in giữ được, ghi vào file để chấm
     style_src = None  # bức ảnh dùng để chọn kiểu upscale: bản key TRƯỚC khi tô đặc, xem bên dưới
     if bg == "none":
@@ -1567,6 +1596,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         shirt = None
     elif bg == "ai":
         no_bg = remove_bg(original)
+        model_alpha = no_bg.getchannel("A")
         if refine:
             no_bg = refine_edge(no_bg, original)  # band pixels come out already decontaminated
         elif kind != "none":
@@ -1585,6 +1615,9 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             no_bg = fill_holes(no_bg, original)
             filled_in = True
         cut = crop_to_content(no_bg)
+        # Mặt nạ thân người cắt đúng khung của cut: ghép vào kênh màu của một ảnh mang cùng alpha.
+        figure = crop_to_content(Image.merge("RGBA", (model_alpha,) * 3 + (no_bg.getchannel("A"),))).getchannel("R") \
+            if args.fill_holes else None
         shirt = None
     else:
         silhouette = remove_bg(original).getchannel("A") if args.fill_holes else None
@@ -1638,6 +1671,12 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
                  f"để qua model upscale; viền có thể mềm. Cắt sát hình trước khi đưa vào để dùng model.")
     else:
         grow_txt = " | phóng: model x4" + (f", thu ảnh gốc còn {shrink:.0%}" if shrink < 1.0 else "")
+    # Thân người dùng model ảnh chụp: chỉ khi người dùng đã bật thân hình đặc (nói ảnh có người), kiểu
+    # là ảnh chụp, và thật sự qua model. Không có cờ đó, model cắt hình coi cả tấm poster là "người".
+    photo = (style == "detail" and not args.vector and shrink is not None and args.fill_holes
+             and (figure is not None or silhouette is not None) and photo_model_ready())
+    if photo:
+        grow_txt += f", người: {PHOTO_MODEL}"
 
     if args.vector:
         q = quantize(cut, colors, binary_alpha=True, merge_delta_e=args.merge)
@@ -1648,12 +1687,17 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         result = render_svg(svg_path, inner)
     elif bg in ("ai", "none"):
         big = enlarge(cut, shrink, model)
+        if photo:
+            big = figure_blend(big, enlarge(cut, shrink, PHOTO_MODEL), figure, feather=max(4, round(big.width / cut.width * 2)))
         big = big.resize(fit_box(*big.size, inner), Image.Resampling.LANCZOS)
         result = flatten_raster(big, colors, args.merge) if colors else tighten_alpha(big)
     else:
         # keyed background: upscale the flat RGB first (cleaner edges, denoised background),
         # key at full resolution, then crop. A source that is already big enough is keyed as is.
         big_rgb = enlarge(original.convert("RGB"), shrink, model)
+        if photo:
+            big_rgb = figure_blend(big_rgb, enlarge(original.convert("RGB"), shrink, PHOTO_MODEL), silhouette,
+                                   feather=max(4, round(big_rgb.width / original.width * 2)))
         keyed = key_bg(big_rgb, bg, args.floor)
         if silhouette:
             # Chốt chặn đo lại trên chính bản sẽ in. Ở ảnh gốc, nhiễu hạt đẩy vùng tối lên trên

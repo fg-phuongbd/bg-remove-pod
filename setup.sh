@@ -27,6 +27,21 @@ else
   echo "    đã có"
 fi
 
+echo "==> Model ảnh chụp cho thân người (4xLSDIRplusC, khi bật thân hình đặc)"
+if [ ! -f bin/models/4xLSDIRplusC.bin ]; then
+  BASE="https://raw.githubusercontent.com/upscayl/custom-models/main/models"
+  mkdir -p bin/models
+  if curl -fL "$BASE/4xLSDIRplusC.param" -o bin/models/4xLSDIRplusC.param && \
+     curl -fL "$BASE/4xLSDIRplusC.bin" -o bin/models/4xLSDIRplusC.bin; then
+    echo "    OK"
+  else
+    rm -f bin/models/4xLSDIRplusC.param bin/models/4xLSDIRplusC.bin
+    echo "    CẢNH BÁO: không tải được. Thân người sẽ dùng x4plus như phần còn lại."
+  fi
+else
+  echo "    đã có"
+fi
+
 echo "==> Kiểm tra"
 ./run.sh --help
 echo

@@ -241,6 +241,18 @@ cố ý: ảnh chụp người tối key trên nền đen có da và tóc ở al
 hàng nghìn đốm và bị coi là hạt. Dòng log in `kiểu: grain`; ép tay bằng `--style grain` nếu nhận
 diện sai.
 
+### Thân người dùng model ảnh chụp
+
+x4plus làm da mịn như sáp, nhất là khi ảnh gốc nhỏ phải phóng gần 4 lần. Model ảnh chụp `4xLSDIRplusC`
+giữ vân da tự nhiên, nhưng biến vân nứt mảnh của chữ đồ họa thành lốm đốm xám: chạy cả ảnh cầu thủ
+bằng nó, chữ WARNER ngả xám, mực đặc 52,7% xuống 48,7% và kết luận tụt xuống *nên xem lại*. Nên khi
+**bật thân hình đặc** (tức đã nói ảnh có người) và kiểu là `detail`, ảnh được phóng hai lần: trong thân
+người lấy màu từ `4xLSDIRplusC`, phần còn lại giữ x4plus, nối bằng một dải mềm co vào trong thân vài
+px, nên mép người và chữ sát người vẫn là bản sắc nét. Độ phủ luôn lấy từ x4plus, nên hình dạng và
+mọi phép đo không đổi. Trên ảnh cầu thủ: mặt tự nhiên, chữ y nguyên, số đo như cũ; chậm thêm khoảng
+40 giây. Không bật thân hình đặc thì không dùng: model cắt hình có thể coi cả tấm poster là "người".
+Dòng log ghi `người: 4xLSDIRplusC`. `./setup.sh` tải model này; thiếu thì thân người dùng x4plus như cũ.
+
 ### Làm cứng chấm
 
 Lanczos giữ chấm là chấm nhưng làm mép chấm thành một dốc mờ dài vài pixel. Với DTF, dốc đó là mực
