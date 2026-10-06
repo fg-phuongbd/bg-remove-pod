@@ -598,7 +598,9 @@ async function loadConfig() {
   }
 }
 
-async function api(path, opts) {
+async function api(path, opts = {}) {
+  // Mọi POST mang header riêng: server từ chối POST thiếu nó, để trang web lạ không gửi thay được.
+  if (opts.method && opts.method !== "GET") opts = { ...opts, headers: { ...(opts.headers || {}), "X-Clearcut": "1" } };
   const r = await fetch(path, opts);
   const j = await r.json();
   if (j && j.error) throw new Error(j.error);

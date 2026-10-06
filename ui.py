@@ -174,10 +174,16 @@ def pick_output(name: str, wanted: str | None) -> Path:
 
 
 def source_path(name: str) -> Path:
-    """Ảnh gốc theo tên, dù nó còn ở input/ hay đã sang input/done/."""
+    """Ảnh gốc theo tên, dù nó còn ở input/ hay đã sang input/done/.
+
+    Tên đến từ trình duyệt, nên chỉ nhận một tên file trần: không dấu gạch, không "..", không file ẩn,
+    và đường dẫn thật phải nằm đúng trong thư mục. Không thế thì "../../x.png" đọc và xóa được file
+    bất kỳ trên máy qua /src và /api/delete."""
+    if not name or name != Path(name).name or "\\" in name or name.startswith("."):
+        raise FileNotFoundError(name)
     for folder in (pipeline.INPUT_DIR, pipeline.INPUT_DIR / "done"):
         p = folder / name
-        if p.is_file():
+        if p.is_file() and p.resolve().parent == folder.resolve():
             return p
     raise FileNotFoundError(name)
 
@@ -305,7 +311,24 @@ class Handler(BaseHTTPRequestHandler):
     def _file(self, path: Path) -> None:
         self._send(200, path.read_bytes(), "image/png")
 
+    def _trusted(self, post: bool) -> bool:
+        """Chỉ phục vụ chính trang này. Host phải là 127.0.0.1 hay localhost (chặn DNS rebinding: một tên
+        miền lạ trỏ về 127.0.0.1 để đọc ảnh và xóa file). Origin, nếu có, cũng vậy. POST còn phải mang
+        header X-Clearcut, thứ một trang web lạ không gửi được nếu không qua CORS preflight, mà server
+        này không bao giờ cho phép: thiếu nó thì ai mở trang lạ cũng có thể bị xóa ảnh (CSRF)."""
+        port = self.server.server_address[1]
+        hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        origin = self.headers.get("Origin")
+        ok = (self.headers.get("Host") in hosts
+              and (origin is None or origin in {f"http://{h}" for h in hosts})
+              and (not post or self.headers.get("X-Clearcut") == "1"))
+        if not ok:
+            self._json({"error": "từ chối: yêu cầu không đến từ trang Clearcut tại máy này"}, 403)
+        return ok
+
     def do_GET(self) -> None:  # noqa: N802 - tên do BaseHTTPRequestHandler quy định
+        if not self._trusted(post=False):
+            return
         route = urlparse(self.path)
         parts = [unquote(s) for s in route.path.strip("/").split("/")]
         wanted = parse_qs(route.query).get("out", [None])[0]  # file in nào của ảnh, nếu hỏi
@@ -373,6 +396,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": f"{type(e).__name__}: {e}"}, 400)
 
     def do_POST(self) -> None:  # noqa: N802
+        if not self._trusted(post=True):
+            return
         route = urlparse(self.path)
         if route.path == "/api/upload":
             self._upload(route)

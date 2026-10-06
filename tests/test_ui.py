@@ -16,6 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pipeline  # noqa: E402
 import ui  # noqa: E402
 
+OK = {"X-Clearcut": "1"}  # header trang gửi kèm mọi POST; trang web lạ không gửi được nếu không qua CORS
+
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
@@ -130,7 +132,7 @@ def test_server_runs_a_job_and_reports_on_it(server, workspace):
     src = workspace / "input" / "a.png"
     _design(src)
     body = json.dumps({"jobs": [{"name": "a.png", "settings": {"size": "400x400"}}]}).encode()
-    req = urllib.request.Request(server + "/api/run", body, {"Content-Type": "application/json"})
+    req = urllib.request.Request(server + "/api/run", body, {"Content-Type": "application/json", **OK})
     with urllib.request.urlopen(req) as r:  # noqa: S310
         assert r.status == 200
     for _ in range(600):                                  # hàng chạy trong luồng nền
@@ -146,7 +148,7 @@ def test_server_runs_a_job_and_reports_on_it(server, workspace):
     rep = json.loads(get(server, "/api/report/a.png")[1])
     assert rep["dac"] > 80
     body = json.dumps({"jobs": [{"name": "a.png", "settings": {"size": "300x300"}}]}).encode()
-    urllib.request.urlopen(urllib.request.Request(server + "/api/run", body, {"Content-Type": "application/json"}))  # noqa: S310
+    urllib.request.urlopen(urllib.request.Request(server + "/api/run", body, {"Content-Type": "application/json", **OK}))  # noqa: S310
     for _ in range(600):
         if not json.loads(get(server, "/api/status")[1])["running"]:
             break
@@ -157,7 +159,7 @@ def test_server_runs_a_job_and_reports_on_it(server, workspace):
 def test_server_refuses_a_job_with_an_unknown_flag(server, workspace):
     _design(workspace / "input" / "a.png")
     body = json.dumps({"jobs": [{"name": "a.png", "settings": {"dungsai": 1}}]}).encode()
-    req = urllib.request.Request(server + "/api/run", body, {"Content-Type": "application/json"})
+    req = urllib.request.Request(server + "/api/run", body, {"Content-Type": "application/json", **OK})
     with pytest.raises(urllib.error.HTTPError) as e:
         urllib.request.urlopen(req)  # noqa: S310
     assert e.value.code == 400
@@ -189,14 +191,14 @@ def test_server_accepts_a_dropped_image_and_refuses_junk(server, workspace):
     buf = io.BytesIO()
     _design(workspace / "tmp.png").save(buf, "PNG")
     req = urllib.request.Request(server + "/api/upload?name=" + urllib.parse.quote("moi.png"),
-                                 buf.getvalue(), {"Content-Type": "application/octet-stream"})
+                                 buf.getvalue(), {"Content-Type": "application/octet-stream", **OK})
     with urllib.request.urlopen(req) as r:  # noqa: S310
         assert json.loads(r.read())["name"] == "moi.png"
     assert (workspace / "input" / "moi.png").exists()
     assert "moi.png" in [i["name"] for i in ui.list_images()]
 
     bad = urllib.request.Request(server + "/api/upload?name=moi2.png", b"khong phai anh",
-                                 {"Content-Type": "application/octet-stream"})
+                                 {"Content-Type": "application/octet-stream", **OK})
     with pytest.raises(urllib.error.HTTPError) as e:
         urllib.request.urlopen(bad)  # noqa: S310
     assert e.value.code == 400
@@ -467,7 +469,7 @@ def test_delete_removes_an_image_and_everything_made_from_it(server, workspace):
     for d, n in (("output", "a_8x8_center.png"), ("output", "a.png"), ("review", "a_8x8_center.png"),
                  ("work", "a-cut.png"), ("output", "ab_8x8_center.png")):
         Image.new("RGBA", (8, 8)).save(workspace / d / n)
-    req = urllib.request.Request(server + "/api/delete?name=a.png", b"", method="POST")
+    req = urllib.request.Request(server + "/api/delete?name=a.png", b"", OK, method="POST")
     with urllib.request.urlopen(req) as r:  # noqa: S310
         assert json.loads(r.read())["removed"] == 5
     left = sorted(p.relative_to(workspace).as_posix() for p in workspace.rglob("*.png"))
@@ -479,7 +481,7 @@ def test_delete_one_print_file_keeps_the_image(server, workspace):
     for n in ("a_8x8_center.png", "a_9x9_center.png"):
         Image.new("RGBA", (8, 8)).save(workspace / "output" / n)
         Image.new("RGBA", (8, 8)).save(workspace / "review" / n)
-    req = urllib.request.Request(server + "/api/delete?name=a.png&out=a_8x8_center.png", b"", method="POST")
+    req = urllib.request.Request(server + "/api/delete?name=a.png&out=a_8x8_center.png", b"", OK, method="POST")
     urllib.request.urlopen(req)  # noqa: S310
     assert [p.name for p in ui.outputs_for("a")] == ["a_9x9_center.png"]
     assert not (workspace / "review" / "a_8x8_center.png").exists() and (workspace / "input" / "a.png").exists()
@@ -488,7 +490,7 @@ def test_delete_one_print_file_keeps_the_image(server, workspace):
 def test_delete_refuses_an_image_that_is_running(server, workspace, monkeypatch):
     _design(workspace / "input" / "a.png")
     monkeypatch.setattr(ui.RUNNER, "busy", {"a.png"})
-    req = urllib.request.Request(server + "/api/delete?name=a.png", b"", method="POST")
+    req = urllib.request.Request(server + "/api/delete?name=a.png", b"", OK, method="POST")
     with pytest.raises(urllib.error.HTTPError) as e:
         urllib.request.urlopen(req)  # noqa: S310
     assert e.value.code == 400 and (workspace / "input" / "a.png").exists()
@@ -504,3 +506,46 @@ def test_page_is_read_again_when_ui_html_changes(server, workspace, tmp_path, mo
     page.write_text("<title>v2</title>", encoding="utf-8")
     os.utime(page, (time.time() + 5, time.time() + 5))
     assert b"v2" in get(server, "/")[1]
+
+
+def _status(req):
+    try:
+        with urllib.request.urlopen(req) as r:  # noqa: S310
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+def test_post_without_the_page_header_is_refused(server, workspace):
+    """Chặn CSRF: một trang web lạ mở trong cùng trình duyệt gửi được POST "đơn giản" tới 127.0.0.1,
+    nhưng không gửi được header riêng mà không qua CORS preflight, thứ server này không bao giờ cho."""
+    _design(workspace / "input" / "a.png")
+    for path in ("/api/delete?name=a.png", "/api/run", "/api/upload?name=b.png"):
+        assert _status(urllib.request.Request(server + path, b"{}", method="POST")) == 403, path
+    assert (workspace / "input" / "a.png").exists()
+
+
+def test_a_request_from_another_site_is_refused(server, workspace):
+    """Origin lạ hoặc Host lạ (DNS rebinding: tên miền lạ trỏ về 127.0.0.1) đều bị từ chối, kể cả GET."""
+    _design(workspace / "input" / "a.png")
+    evil = urllib.request.Request(server + "/api/delete?name=a.png", b"", {**OK, "Origin": "https://evil.example"}, method="POST")
+    assert _status(evil) == 403 and (workspace / "input" / "a.png").exists()
+    port = server.rsplit(":", 1)[1]
+    assert _status(urllib.request.Request(server + "/api/images", headers={"Host": f"evil.example:{port}"})) == 403
+    assert _status(urllib.request.Request(server + "/api/images", headers={"Host": f"localhost:{port}"})) == 200
+    same = urllib.request.Request(server + "/api/delete?name=a.png", b"", {**OK, "Origin": server}, method="POST")
+    assert _status(same) == 200
+
+
+def test_names_cannot_climb_out_of_input(server, workspace):
+    """Tên ảnh từ trình duyệt không được trỏ ra ngoài input/: không đọc, không xóa được file nào khác."""
+    outside = workspace / "bimat.png"
+    _design(outside)
+    _design(workspace / "input" / "a.png")
+    for bad in ("../bimat.png", "done/../../bimat.png", "..", "/etc/hosts", "a.png/", ".hidden.png"):
+        with pytest.raises(FileNotFoundError):
+            ui.source_path(bad)
+        q = urllib.parse.quote(bad, safe="")
+        assert _status(urllib.request.Request(server + "/api/delete?name=" + q, b"", OK, method="POST")) == 400, bad
+    assert _status(urllib.request.Request(server + "/src/" + urllib.parse.quote("../bimat.png", safe=""))) == 404
+    assert outside.exists()
