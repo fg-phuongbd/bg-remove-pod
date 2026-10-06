@@ -551,7 +551,8 @@ HALFTONE_LPI = 30  # 10 px mỗi ô ở 300 DPI, khoảng 0,85 mm: thô vừa đ
 
 
 def halftone_fade(img: Image.Image, lpi: float = HALFTONE_LPI, below: int = DTF_COVERAGE, min_cover: float = 0.15,
-                  edge_px: int = 3, angle: float = 22.5, dpi: int = DPI) -> Image.Image:
+                  edge_px: int = 3, angle: float = 22.5, dpi: int = DPI, smooth_sigma: float = 4.0,
+                  smooth_tol: float = 0.25) -> Image.Image:
     """--halftone-fade: glow, bóng đổ, airbrush phủ dưới 40% thành chấm halftone đặc, cho in DTF.
 
     Mực phủ mỏng nhận ít bột keo nên bong sau vài lần giặt; trên ảnh cầu thủ, bóng đổ lên chữ là
@@ -561,7 +562,15 @@ def halftone_fade(img: Image.Image, lpi: float = HALFTONE_LPI, below: int = DTF_
 
     Chấm dưới `min_cover` nhỏ tới mức không giữ được keo, nên bỏ hẳn: mép ngoài cùng của glow mất
     đi, bù lại không có bụi mực rơi khỏi bàn ép. Vùng mờ không có chỗ nào đậm tới `min_cover` thì
-    không phải glow mà là vệt mờ do phóng ảnh, để nguyên. Mép khử răng cưa của mảng đặc (trong `edge_px`
+    không phải glow mà là vệt mờ do phóng ảnh, để nguyên.
+
+    Chỉ chỗ mờ *mượt* mới thành chấm: nơi alpha quanh pixel lệch khỏi bản làm mịn của chính nó
+    (Gauss `smooth_sigma` px, lấy trung bình bình phương trên cùng cửa sổ) quá `smooth_tol` lần độ
+    phủ ở đó, tối thiểu 6 mức, là vân hạt, giữ nguyên. Xét từng pixel lẻ thì không đủ: trên vân nhiễu
+    thuần, ba phần mười pixel tình cờ nằm sát trung bình và vẫn bị chấm hóa. Không
+    có điều kiện này, vân xám mịn của ảnh đen trắng trên nền đen thành chấm trắng rải như tuyết trên
+    mảng tối, rõ hơn mọi thứ nó định sửa. Đổi lại phần phủ thấp nằm trong vân hạt vẫn còn: trên poster
+    ảnh đen trắng 26,9% chỉ xuống 23,1%, trên bóng đổ cầu thủ 2,0% xuống 1,3%. Mép khử răng cưa của mảng đặc (trong `edge_px`
     quanh mực phủ từ 40% trở lên) giữ nguyên, không thì mọi đường viền thành răng cưa chấm. Màu
     không đổi, chỉ alpha: màu đã được giải theo nền nên chấm đặc in ra đúng màu ấy."""
     from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
@@ -586,6 +595,9 @@ def halftone_fade(img: Image.Image, lpi: float = HALFTONE_LPI, below: int = DTF_
     d2 = (u - np.floor(u) - 0.5) ** 2 + (v - np.floor(v) - 0.5) ** 2   # bình phương khoảng cách tới tâm ô
     cover = a / 255.0
     dot = (np.pi * d2 < cover) & (cover >= min_cover)              # đĩa diện tích pi*r^2 = độ phủ
+    soft = ndimage.gaussian_filter(a, smooth_sigma)
+    rough = np.sqrt(ndimage.gaussian_filter((a - soft) ** 2, smooth_sigma))   # gồ ghề của cả vùng quanh pixel
+    fade &= rough <= np.maximum(6.0, smooth_tol * soft)            # vân hạt không phải vùng mờ mượt
     rgba[:, :, 3] = np.where(fade, np.where(dot, 255, 0), rgba[:, :, 3]).astype(np.uint8)
     return Image.fromarray(rgba, "RGBA")
 

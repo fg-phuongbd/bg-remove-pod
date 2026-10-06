@@ -582,17 +582,19 @@ là mực đặc nên bám chắc, và nhìn từ xa mật độ chấm cho lạ
 0,85 mm) xoay 22,5 độ. Mép khử răng cưa của mảng đặc giữ nguyên; chấm dưới 15% quá nhỏ để bám nên bị
 bỏ; vùng chỉ có vệt cực mờ do phóng ảnh thì để nguyên. Tên file thêm `_ht`.
 
-Đo trên file thật, ở khổ 4500 x 5400:
+Chỉ chỗ mờ **mượt** mới thành chấm. Vân hạt mờ, như ảnh đen trắng in trên nền đen, giữ nguyên: bản
+đầu tiên của cờ này chấm hóa cả vân hạt và rắc chấm trắng như tuyết lên mảng tối, rõ hơn mọi thứ nó
+định sửa. Đo trên file thật, ở khổ 4500 x 5400:
 
-| Thiết kế | Phủ thấp | Diện tích đổi trên áo đen |
+| Thiết kế | Phủ thấp | Pixel đổi |
 |---|---|---|
-| Ảnh cầu thủ, thân hình đặc | 2,0% → 1,2% | 0,4% |
-| Poster glow và sương phun | 7,0% → 4,4% (hết cảnh báo) | 0,9% |
+| Ảnh cầu thủ, thân hình đặc (bóng đổ mượt) | 2,0% → 1,5% | 0,25% |
+| Poster glow và sương phun | 7,0% → 6,9% | 0,05% |
+| Poster ảnh đen trắng vân hạt | 26,9% → 26,8% | 0,08% |
 
-Phần phủ thấp còn lại phần lớn là dải mép 3 px quanh mảng đặc, cố ý giữ. Đổi lại, soi ở 1:1 thì nét
-cực mờ và mảnh thành chuỗi chấm đứt, và chấm nhỏ hơn 1 mm² được đếm vào `đốm nhỏ`: khi cờ bật, kết
-luận ghi nhận chúng là do chấm hóa thay vì cảnh báo. Mặc định tắt; bật cho thiết kế nhiều glow sẽ in
-DTF số lượng, và in thử một chiếc trước.
+Nghĩa là cờ an toàn nhưng chỉ giúp được thiết kế có glow hoặc bóng đổ thật sự mượt. Mực phủ thấp
+nằm trong vân hạt thì không chấm hóa được mà không làm hỏng hình: với những poster đó, in DTG có lót
+trắng, hoặc in thử một chiếc và giặt trước khi chạy số lượng. Mặc định tắt.
 
 ## Nét mảnh và đốm nhỏ: `--dtf-safe`
 

@@ -172,7 +172,8 @@ def test_halftone_fade_turns_a_faint_glow_into_solid_dots():
     img = _fade_beside_a_block()
     out = np.asarray(pipeline.halftone_fade(img))
     a_in, a = np.asarray(img)[:, :, 3].astype(float), out[:, :, 3].astype(float)
-    band = (slice(None), slice(104, 301))                   # cách khối hơn 2 px: vùng glow thật
+    # Cách khối hơn 15 px: sát khối, cửa sổ đo độ mượt trùm cả mép khối nên glow ở đó giữ nguyên mượt.
+    band = (slice(None), slice(116, 301))
     vals = np.unique(a[band])
     assert set(vals) <= {0.0, 255.0}, vals                  # chỉ còn chấm đặc hoặc vải
     keep = a_in[band] >= 0.15 * 255
@@ -188,3 +189,14 @@ def test_halftone_fade_leaves_a_solid_design_alone():
     ImageDraw.Draw(im).ellipse((10, 10, 110, 110), fill=(200, 30, 40, 255))
     im = im.resize((360, 360), Image.Resampling.LANCZOS)     # mép mềm như sau khi phóng
     assert (np.asarray(pipeline.halftone_fade(im)) == np.asarray(im)).all()
+
+
+def test_halftone_fade_leaves_a_noisy_texture_alone():
+    """Vân hạt mờ (ảnh đen trắng in trên nền đen) không phải vùng mờ mượt: chấm hóa nó chỉ rắc chấm
+    trắng ngẫu nhiên như tuyết lên mảng tối. Chỉ chỗ mượt mới thành chấm."""
+    rng = np.random.default_rng(7)
+    a = np.clip(rng.normal(45, 30, (200, 200)), 0, 101).astype(np.uint8)
+    img = Image.fromarray(np.dstack([np.full((200, 200, 3), 230, np.uint8), a]), "RGBA")
+    out = np.asarray(pipeline.halftone_fade(img))[:, :, 3]
+    changed = (out != a).mean()
+    assert changed < 0.05, changed
