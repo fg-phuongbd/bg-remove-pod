@@ -496,3 +496,50 @@ def test_patch_tinted_holes_fills_a_hole_with_design_color_and_keeps_a_counter()
     assert o[70, 80, 3] == 255 and tuple(o[70, 80, :3]) == (236, 172, 196)   # da được vá, đúng màu gốc
     assert o[80, 230, 3] == 0                                                # lòng chữ O vẫn trong suốt
     assert patched == 1
+
+
+def _disk_with_a_blended_rim(color=(200, 150, 100), bg=(12, 12, 12)):
+    """Đĩa màu trên nền đen, mép khử răng cưa pha với nền; 'model' coi cả dải mép là đặc."""
+    yy, xx = np.mgrid[:120, :120]
+    r = np.hypot(xx - 60, yy - 60)
+    cover = np.clip(40.5 - r, 0, 1)[:, :, None]               # dải mép 1 px pha trộn
+    rgb = (np.array(color) * cover + np.array(bg) * (1 - cover)).round().astype(np.uint8)
+    src = Image.fromarray(rgb, "RGB")
+    cut = src.convert("RGBA"); cut.putalpha(Image.fromarray(((r < 41.5) * 255).astype(np.uint8)))
+    return src, cut, r
+
+
+def test_refine_rim_unmixes_the_band_the_model_called_solid():
+    src, cut, r = _disk_with_a_blended_rim()
+    out = np.asarray(pipeline.refine_rim(cut, src)).astype(float)
+    # Dải pha rõ ràng (độ phủ thật 30-100%); pixel thuần nền model gọi là đặc thì cố ý giữ nguyên,
+    # vì ở mức một pixel nó không phân biệt được với bóng đổ thật của thiết kế.
+    cover = np.clip(40.5 - r, 0, 1)
+    blend = (cover >= 0.35) & (cover < 0.95)
+    lum = out[:, :, :3] @ np.array([0.299, 0.587, 0.114])
+    assert lum[blend].mean() > 150                             # màu mép là màu đĩa, không phải pha đen
+    assert out[:, :, 3][blend].mean() < 220                    # độ phủ mép theo mức pha thật
+    inner = r < 35
+    assert (out[inner] == np.asarray(cut)[inner]).all()       # bên trong không đổi
+
+
+def test_refine_rim_keeps_a_dark_design_edge():
+    """Mép của tóc tối trên nền đen: màu bên trong cũng tối, nên không bị khoét."""
+    src, cut, r = _disk_with_a_blended_rim(color=(45, 35, 30))
+    out = np.asarray(pipeline.refine_rim(cut, src)).astype(float)
+    solid_edge = (r > 38) & (r < 39.5)
+    assert out[:, :, 3][solid_edge].min() == 255
+
+
+def test_refine_rim_does_not_blow_faint_shadow_up_into_bright_specks():
+    """Bóng tối mờ dưới đế giày cạnh mảng trắng: độ phủ ước rất thấp, và giải màu ở đó chia cho số
+    rất nhỏ, đẩy nhiễu thành đốm trắng. Pixel gần như nền thì trong suốt hẳn, không thành đốm sáng."""
+    rgb = np.full((60, 60, 3), 12, np.uint8)
+    rgb[:, :30] = 240                                        # mảng trắng
+    rgb[:, 30:32] = (30, 28, 26)                             # bóng tối mờ sát mép, chỉ hơi khác nền
+    src = Image.fromarray(rgb, "RGB")
+    cut = src.convert("RGBA"); a = np.zeros((60, 60), np.uint8); a[:, :32] = 255; cut.putalpha(Image.fromarray(a))
+    out = np.asarray(pipeline.refine_rim(cut, src)).astype(float)
+    faint = out[:, 30:32]
+    lum = faint[:, :, :3] @ np.array([0.299, 0.587, 0.114])
+    assert not ((faint[:, :, 3] > 0) & (lum > 120)).any()     # không có pixel mờ mà sáng chói

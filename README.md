@@ -209,6 +209,14 @@ thiết kế bị thủng, được lấp bằng màu gốc; lỗ đúng màu n�
 Trên ảnh thật: lỗ trán poster hồng liền lại, mặt vát xám trong chữ của poster đen hết thủng, ảnh cầu
 thủ chỉ đổi 0,05% diện tích.
 
+**Viền sạch khi in lên áo sáng.** Ảnh cầu thủ cắt ra in áo kem từng có một đường viền đen mảnh quanh
+người, vì hai lẽ. Phần trong suốt của ảnh cắt còn mang màu nền đen, và Real-ESRGAN x4plus loang màu
+đó vào viền; nên trước khi phóng, chỗ trong suốt được tô bằng màu của pixel đặc gần nhất. Và model gọi
+cả dải pha giữa da và nền là đặc; nên ở 2 px sát mép, độ phủ được ước lại bằng cách so màu với màu
+phía trong rồi giải màu theo nền. Chỉ pixel pha rõ ràng (từ 30%) được chỉnh: dưới đó mép pha và bóng
+đổ thật (như bóng dưới đế giày) cùng một màu, và khoét nó làm mép bóng lởm chởm. Áo cùng màu nền không
+đi qua hai bước này.
+
 Dòng đầu khi xử lý in ra quyết định này, ví dụ `nền: color | áo: khác màu nền | cách: cắt hình + tinh chỉnh viền`.
 
 Sau đó ảnh đi qua **raster** (mặc định): upscale 4 lần rồi co về khung in, giữ nguyên màu và chi

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 from PIL import Image, ImageDraw
 
 import pipeline
@@ -200,3 +201,22 @@ def test_halftone_fade_leaves_a_noisy_texture_alone():
     out = np.asarray(pipeline.halftone_fade(img))[:, :, 3]
     changed = (out != a).mean()
     assert changed < 0.05, changed
+
+
+@pytest.mark.parametrize("model", ["lanczos", "realesrgan-x4plus", "realesrgan-x4plus-anime"])
+def test_upscaling_a_cutout_does_not_darken_its_edge(model):
+    if model != "lanczos" and not pipeline.REALESRGAN_BIN.exists():
+        pytest.skip("không có Real-ESRGAN")
+    """Phần trong suốt của ảnh cắt vẫn mang màu nền đen; phóng to trộn màu đó vào viền và để lại một
+    đường viền tối 1-3 px, thấy rõ khi in lên áo sáng. Viền sau khi phóng phải giữ màu của hình."""
+    rgb = np.zeros((120, 120, 3), np.uint8)                  # dưới phần trong suốt: đen, như nền gốc
+    a = np.zeros((120, 120), np.uint8)
+    yy, xx = np.mgrid[:120, :120]
+    disk = (xx - 60) ** 2 + (yy - 60) ** 2 < 40 ** 2
+    rgb[disk] = (200, 150, 100)
+    a[disk] = 255
+    big = np.asarray(pipeline.upscale(Image.fromarray(np.dstack([rgb, a]), "RGBA"), model=model)).astype(float)
+    edge = (big[:, :, 3] > 128) & (big[:, :, 3] < 255)
+    assert edge.sum() > 100
+    lum = big[:, :, :3][edge] @ np.array([0.299, 0.587, 0.114])
+    assert lum.mean() > 150 * 0.95, lum.mean()               # màu hình có độ sáng ~ 158

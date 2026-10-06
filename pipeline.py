@@ -443,12 +443,32 @@ def render_svg(svg_path: Path, box: tuple[int, int]) -> Image.Image:
 UPSCALE_MODEL = {"flat": "realesrgan-x4plus-anime", "detail": "realesrgan-x4plus", "grain": "lanczos"}
 
 
+def bleed_edges(img: Image.Image) -> Image.Image:
+    """Tô phần trong suốt hẳn bằng màu của pixel đặc gần nhất; alpha giữ nguyên.
+
+    Ảnh cắt còn mang màu nền gốc (đen) dưới chỗ trong suốt. Real-ESRGAN x4plus xử lý màu và alpha
+    riêng, nên màu đen đó loang vào viền: trên ảnh cầu thủ cắt ra in áo kem, dải 1-3 px sát mép tối
+    hẳn (độ sáng 125-161 so với 188 bên trong) và in thành một đường viền đen quanh người. Tô trước
+    bằng màu viền thì model chỉ trộn những màu giống viền. Không đổi gì ở chỗ có mực."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    rgba = np.asarray(img.convert("RGBA")).copy()
+    a = rgba[:, :, 3]
+    solid = a >= 128
+    clear = a == 0
+    if not solid.any() or not clear.any():
+        return img
+    iy, ix = ndimage.distance_transform_edt(~solid, return_distances=False, return_indices=True)
+    rgba[clear, :3] = rgba[iy[clear], ix[clear], :3]
+    return Image.fromarray(rgba, "RGBA")
+
+
 def upscale(img: Image.Image, scale: int = 4, model: str = "realesrgan-x4plus-anime") -> Image.Image:
     """Real-ESRGAN if the binary exists (anime model for flat art, x4plus for painterly), else Lanczos.
 
     `model="lanczos"` asks for plain resampling on purpose: halftone dots and grain come out of
     either ESRGAN model as painted fur or cracked blobs, while Lanczos keeps the dots as dots."""
-    img = img.convert("RGBA") if img.mode == "RGBA" else img.convert("RGB")
+    img = bleed_edges(img.convert("RGBA")) if img.mode == "RGBA" else img.convert("RGB")
     if model == "lanczos":
         return img.resize((img.width * scale, img.height * scale), Image.Resampling.LANCZOS)
     if REALESRGAN_BIN.exists():
@@ -1158,6 +1178,48 @@ def patch_tinted_holes(cut: Image.Image, original: Image.Image, min_dist: float 
     return Image.fromarray(out, "RGBA"), int(tinted.sum())
 
 
+def refine_rim(cut: Image.Image, original: Image.Image, band: float = 2.0, depth: float = 3.0,
+               min_contrast: float = 30.0) -> Image.Image:
+    """Ước lại độ phủ ở dải `band` px sát mép ảnh cắt, nơi model gọi là đặc nhưng màu còn pha nền.
+
+    Mép khử răng cưa của ảnh gốc là pixel pha giữa hình và nền đen. Model hay coi cả dải đó là đặc
+    (alpha 255), decontaminate chỉ sửa chỗ alpha <= 200, nên dải pha giữ nguyên màu tối; phóng 3,9
+    lần nó thành viền đen 3-4 px quanh người khi in lên áo sáng. Ở mỗi pixel trong dải, so khoảng
+    cách tới màu nền của nó với của màu thật phía trong (pixel đặc gần nhất cách mép quá `depth`
+    px): tỉ số đó là độ phủ, như Refine Edge. Chỉ hạ alpha, không bao giờ nâng; màu được giải lại
+    theo nền. Pixel ước dưới 30% giữ nguyên: ở đó mép pha và bóng đổ thật không phân biệt được.
+    Chỗ mà màu phía trong cũng sát nền (dưới `min_contrast`) thì không đủ tương phản để
+    đo, giữ nguyên; tóc tối có màu trong cũng tối, nên tỉ số gần 1 và mép tóc không bị khoét."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    out = np.asarray(cut.convert("RGBA")).astype(np.float32)
+    rgb = np.asarray(original.convert("RGB")).astype(np.float32)
+    a = out[:, :, 3]
+    solid = a >= 128
+    depth_in = ndimage.distance_transform_edt(solid)
+    rim = solid & (depth_in <= band)
+    interior = solid & (depth_in > depth)
+    if not rim.any() or not interior.any():
+        return cut
+    iy, ix = ndimage.distance_transform_edt(~interior, return_distances=False, return_indices=True)
+    bg = np.array(bg_color(original), dtype=np.float32)
+    d_pix = np.linalg.norm(rgb - bg, axis=2)
+    d_ref = np.linalg.norm(rgb[iy, ix] - bg, axis=2)
+    est = np.clip(d_pix / np.maximum(d_ref, 1.0), 0.0, 1.0) * 255.0
+    # Chỉ pixel pha rõ ràng (30% trở lên). Dưới đó, một pixel tối cạnh mảng sáng có thể là mép pha
+    # 7% hay là bóng đổ thật của thiết kế: màu như nhau. Bóng dưới đế giày dày nhiều pixel, và khoét
+    # 2 px ngoài cùng của nó làm mép bóng lởm chởm, áo lộ qua: tệ hơn để nguyên như model cắt.
+    use = rim & (d_ref >= min_contrast) & (est < a) & (est >= 0.3 * 255.0)
+    if not use.any():
+        return cut
+    new_a = np.where(use, est, a)
+    w = (new_a / 255.0)[:, :, None]
+    color = np.clip((rgb - (1.0 - w) * bg) / np.where(w > 0, w, 1.0), 0, 255)
+    out[use, :3] = color[use]
+    out[:, :, 3] = new_a
+    return Image.fromarray(out.round().astype(np.uint8), "RGBA")
+
+
 def fill_holes(cut: Image.Image, original: Image.Image) -> Image.Image:
     """Make enclosed transparent regions opaque again, restoring RGB from the original.
 
@@ -1509,6 +1571,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             no_bg = refine_edge(no_bg, original)  # band pixels come out already decontaminated
         elif kind != "none":
             no_bg = decontaminate(no_bg, bg_color(original))
+            no_bg = refine_rim(no_bg, original)
         if kind != "none":
             no_bg, by_model, kept = recover_design(no_bg, original)
             if kept - by_model > 2:
