@@ -1039,6 +1039,32 @@ def decontaminate(cut: Image.Image, bg: tuple[int, int, int], rim_max: int = 200
     return Image.fromarray(out.round().astype(np.uint8), "RGBA")
 
 
+def recover_design(cut: Image.Image, original: Image.Image, floor: float = KEY_FLOOR,
+                   ink: float = 60.0) -> tuple[Image.Image, float, float]:
+    """Lấy lại phần thiết kế mà model cắt hình bỏ đi, trả về (ảnh, % model giữ, % giữ sau cùng).
+
+    Model cắt hình tìm *vật thể chính*, không phải *mọi phần thiết kế*: trên ảnh cầu thủ đứng trước
+    chữ WARNER, nó giữ người và bỏ hết chữ, 62% thiết kế, mà không ai được báo. Đường này chỉ chạy
+    với ảnh gốc nền trơn, nên mọi pixel khác hẳn màu nền chắc chắn là mực. Bước này hợp phần model
+    giữ với bản key theo khoảng cách màu nền (cùng phép key của đường áo cùng màu): ở mỗi pixel,
+    bản nào đục hơn thì dùng bản đó. Chỉ thêm, không bao giờ bớt: chi tiết cùng màu nền nằm trong
+    hình (mắt trắng trên nền trắng) model giữ thì vẫn giữ. Viền chữ lấy lại đã được giải màu theo
+    nền, nên không mang theo quầng nền sang áo khác màu.
+
+    "Thiết kế" để đếm là pixel cách màu nền hơn `ink`: rõ ràng là mực, không phải nhiễu nền."""
+    c = np.asarray(cut.convert("RGBA")).astype(np.float32)
+    keyed = np.asarray(key_color(original.convert("RGB"), floor=floor)).astype(np.float32)
+    rgb = np.asarray(original.convert("RGB")).astype(np.float32)
+    design = np.linalg.norm(rgb - np.array(bg_color(original), dtype=np.float32), axis=2) > ink
+    take = keyed[:, :, 3] > c[:, :, 3]
+    out = np.where(take[:, :, None], keyed, c)
+
+    def share(alpha: np.ndarray) -> float:
+        return 100.0 * float((design & (alpha >= 128)).sum()) / float(design.sum()) if design.any() else 100.0
+
+    return (Image.fromarray(out.round().astype(np.uint8), "RGBA"), share(c[:, :, 3]), share(out[:, :, 3]))
+
+
 def fill_holes(cut: Image.Image, original: Image.Image) -> Image.Image:
     """Make enclosed transparent regions opaque again, restoring RGB from the original.
 
@@ -1326,7 +1352,7 @@ def measure_print(out: Path, src: Path) -> dict:
     meta = read_meta(out) or {}
     rep["fill"] = bool(meta.get("flags", {}).get("fill_holes")) and "thân hình đặc" in meta.get("how", "")
     if meta.get("mode") in ("ai", "none"):
-        return dict(rep, thua=None, sai_so=None, shirt=None)
+        return dict(rep, thua=None, sai_so=None, shirt=None, giu=meta.get("kept"))
     original = load_image(src).convert("RGB")
     bg = np.array(bg_color(original), dtype=np.float32)
     a = (alpha / 255.0)[:, :, None]
@@ -1378,6 +1404,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
     kind = detect_bg(original)
     bg, refine = choose_mode(args, kind)
     filled_in = False  # --fill-holes có thực sự được áp dụng không, để dòng log nói đúng
+    kept = None  # đường cắt hình: phần trăm thiết kế file in giữ được, ghi vào file để chấm
     style_src = None  # bức ảnh dùng để chọn kiểu upscale: bản key TRƯỚC khi tô đặc, xem bên dưới
     if bg == "none":
         cut = crop_to_content(original)
@@ -1388,6 +1415,11 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             no_bg = refine_edge(no_bg, original)  # band pixels come out already decontaminated
         elif kind != "none":
             no_bg = decontaminate(no_bg, bg_color(original))
+        if kind != "none":
+            no_bg, by_model, kept = recover_design(no_bg, original)
+            if kept - by_model > 2:
+                warn(f"ĐÃ LẤY LẠI {kept - by_model:.0f}% thiết kế mà model cắt hình bỏ đi (chữ, đồ họa nằm "
+                     f"rời vật thể chính): model chỉ giữ {by_model:.0f}%. Mở file in xem lại phần chữ.")
         if args.fill_holes:
             no_bg = fill_holes(no_bg, original)
             filled_in = True
@@ -1519,7 +1551,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
              f"In DTG có lót trắng thì không sao.")
     save_print_png(result, out_path, clean=not args.no_clean,
                    meta={"flags": flags, "bg": kind, "mode": bg, "how": how, "cmd": cmd_line(flags),
-                         "notes": notes})
+                         "notes": notes, **({"kept": round(kept, 1)} if kept is not None else {})})
     make_review(original, result, REVIEW_DIR / name, shirt=shirt)
     return out_path
 
@@ -1543,6 +1575,10 @@ def print_verdict(report: dict, dtf_warn: float = DTF_WARN) -> dict:
         else:
             hard.append(f"{report['thua']:.0f}% mực in đè lên áo cùng màu mà không bật thân hình đặc: "
                         f"nhận diện nền sai hoặc bật --fill-holes nhầm cho poster. Mở ảnh so sánh xem")
+    giu = report.get("giu")
+    if giu is not None and giu < 90:
+        hard.append(f"model cắt hình chỉ giữ {giu:.0f}% thiết kế, mất {100 - giu:.0f}% (thường là chữ, đồ họa "
+                    f"rời): file in sẽ thiếu. Mở ảnh so sánh xem, hoặc in áo cùng màu nền")
     if (report.get("sai_so") or 0) > 5:
         hard.append(f"sai số khi in {report['sai_so']:.1f} mức trên 255, mở ảnh so sánh xem bằng mắt")
     if report.get("phu_thap", 0) > dtf_warn:

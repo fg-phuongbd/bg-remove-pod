@@ -3,7 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
 import pipeline
 
@@ -805,3 +805,35 @@ def test_suggests_solid_body_for_a_photo_keyed_full_of_holes(dirs, capsys):
     assert pipeline.main(["--size", "240x240", "--keep-input", str(src2)]) == 0
     notes = pipeline.read_meta(dirs / "output" / "sach_240x240_center.png")["notes"]
     assert not any(n.startswith("GỢI Ý") for n in notes)
+
+
+def test_a_cutout_that_lost_design_is_recovered_and_noted(dirs, monkeypatch):
+    """Model cắt hình giữ người, bỏ chữ: file in vẫn phải có chữ, và lần chạy phải nói đã lấy lại."""
+    def figure_only(img):
+        m = Image.new("L", img.size, 0)
+        ImageDraw.Draw(m).ellipse((30, 30, 130, 170), fill=255)
+        out = img.convert("RGBA"); out.putalpha(m)
+        return out
+    monkeypatch.setattr(pipeline, "remove_bg", figure_only)
+    src = dirs / "input" / "cau_thu.png"
+    im = Image.new("RGB", (300, 200), (12, 12, 12))
+    d = ImageDraw.Draw(im)
+    d.ellipse((30, 30, 130, 170), fill=(200, 30, 40))
+    d.rectangle((180, 60, 280, 140), fill=(240, 240, 240))
+    im.save(src)
+    assert pipeline.main(["--size", "300x200", "--keep-input", "--shirt", "other", str(src)]) == 0
+    out = dirs / "output" / "cau_thu_300x200_center_cutout.png"
+    a = np.asarray(Image.open(out).convert("RGBA"))[:, :, 3]
+    assert (a > 250).sum() > 0.9 * (100 * 140 * 0.785 + 100 * 80)   # cả người lẫn khối chữ đều có mực
+    meta = pipeline.read_meta(out)
+    assert any(n.startswith("ĐÃ LẤY LẠI") for n in meta["notes"]), meta["notes"]
+    assert meta["kept"] > 99
+    rep = pipeline.measure_print(out, src)
+    assert rep["giu"] > 99 and pipeline.print_verdict(rep)["muc"] != "hong"
+
+
+def test_verdict_fails_a_cutout_that_kept_too_little_of_the_design():
+    good = {"dac": 90, "phu_thap": 1, "manh": 0, "dom": 0, "thua": None, "sai_so": None, "giu": 99.5}
+    assert pipeline.print_verdict(good)["muc"] == "dat"
+    bad = pipeline.print_verdict(dict(good, giu=38.0))
+    assert bad["muc"] == "hong" and any("62%" in w for w in bad["why"])

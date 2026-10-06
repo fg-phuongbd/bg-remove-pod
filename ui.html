@@ -969,7 +969,7 @@ function showNums(r) {
   $("#sumline").innerHTML = (r.muc ? `<span class="verdict ${r.muc}">${esc(r.nhan)}</span>` : "")
     + kv("Mực đặc", r.dac + "%") + kv("Phủ thấp", r.phu_thap + "%", r.phu_thap > 5)
     + kv("Trùng màu áo", r.thua == null ? "—" : r.thua + "%")
-    + kv("Sai số", r.sai_so ?? "—")
+    + (r.giu != null ? kv("Giữ thiết kế", r.giu + "%", r.giu < 90) : kv("Sai số", r.sai_so ?? "—"))
     + (notes.length ? `<span class="warns">${notes.length} cảnh báo khi chạy</span>` : "");
   const m = (label, val, opts = {}) => `<div class="metric"${opts.tip ? ` title="${esc(opts.tip)}"` : ""}><span>${label}</span><b class="${opts.w ? "w" : ""}${opts.sm ? " sm" : ""}">${val}</b></div>`;
   const reasons = [...(r.why || []).map(w => `<li>${esc(w)}</li>`), ...(r.info || []).map(w => `<li class="info">${esc(w)}</li>`)];
@@ -983,6 +983,7 @@ function showNums(r) {
       ${m("Nét mảnh", (r.manh ?? "—") + "%", { w: r.manh > 5, tip: "mực trong nét mảnh hơn 0,5 mm: in DTF dễ bong, thử bật nới nét DTF" })}
       ${m("Đốm nhỏ", (r.dom ?? "—") + "%", { w: r.dom > 1, tip: "đốm rời nhỏ hơn 1 mm²: dễ rơi khỏi bàn ép" })}
       ${m("Ngoài gamut", r.gamut == null ? "—" : r.gamut + "%", { w: r.gamut > 30, tip: r.gamut == null ? "máy không có hồ sơ CMYK" : `lệch quá 10 ΔE sau khi qua hồ sơ CMYK, lệch lớn nhất ${r.de_max} ΔE. Bật Xem như in để thấy` })}
+      ${r.giu != null ? m("Giữ thiết kế", r.giu + "%", { w: r.giu < 90, tip: "file cắt hình: phần trăm pixel rõ ràng là mực của ảnh gốc còn trong file in. Model cắt hình hay bỏ chữ, đồ họa rời; app lấy lại phần đó" }) : ""}
       ${m("Sai số khi in", r.sai_so ?? "—", { tip: r.sai_so == null ? "không đo được: file cắt hình hoặc một màu mực" : "trên 255 mức; trên 5 là phải mở ảnh ra so" })}
       ${m("Màu áo", r.shirt || "khác màu nền", { sm: true })}
       ${meta.how ? m("Cách xử lý", esc(meta.how), { sm: true }) : ""}

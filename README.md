@@ -193,6 +193,14 @@ và có thể để lại vụn nhỏ ở viền.
 | **màu trơn** (hồng, xanh…) | Key màu nền: alpha theo khoảng cách tới màu nền, bù màu. Vùng vẽ bằng đúng màu nền cũng trong suốt. | Cắt hình bằng BiRefNet **+ tinh chỉnh viền**: bên trong tin model, dải viền quyết định từng pixel theo màu nền, nên bỏ được dải nền dính viền và lấy lại tia, chấm mực mảnh mà model cắt cụt. | `other` |
 | **đã trong suốt** | Bỏ qua tách nền | Bỏ qua tách nền | |
 
+**Model cắt hình tìm vật thể chính, không phải mọi phần thiết kế.** Trên ảnh cầu thủ đứng trước chữ
+WARNER, BiRefNet giữ người và bỏ hết chữ: mất 62% thiết kế. Vì ảnh gốc luôn có nền trơn, mọi pixel
+khác hẳn màu nền chắc chắn là mực, nên sau model, pipeline hợp thêm bản key theo khoảng cách màu nền:
+pixel nào bản key đục hơn thì dùng bản key. Chỉ thêm, không bớt: chi tiết cùng màu nền nằm trong hình
+mà model giữ thì vẫn giữ. Lấy lại quá 2% thì lần chạy báo `ĐÃ LẤY LẠI …`, và file in ghi con số
+**giữ thiết kế** (phần trăm pixel rõ ràng là mực còn trong file in). Dưới 90% thì bị chấm *Không dùng
+được*. Trên ảnh cầu thủ: 38% lên 99,2%; trên hai poster: 95% lên 98,7%, và 99,8%.
+
 Dòng đầu khi xử lý in ra quyết định này, ví dụ `nền: color | áo: khác màu nền | cách: cắt hình + tinh chỉnh viền`.
 
 Sau đó ảnh đi qua **raster** (mặc định): upscale 4 lần rồi co về khung in, giữ nguyên màu và chi

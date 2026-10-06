@@ -425,3 +425,47 @@ def test_see_through_counts_keyed_out_holes_inside_the_figure():
     a[70:130, 70:130] = 0                         # áo tối bị key thủng ở giữa thân: 25% thân hình
     holed = Image.fromarray(np.dstack([np.full((200, 200, 3), 200, np.uint8), a]), "RGBA")
     assert 20 < pipeline.see_through(holed) < 30
+
+
+def _figure_and_text():
+    """Một 'người' (ellipse đỏ) và một khối chữ trắng rời bên cạnh, trên nền đen trơn."""
+    im = Image.new("RGB", (300, 200), (12, 12, 12))
+    d = ImageDraw.Draw(im)
+    d.ellipse((30, 30, 130, 170), fill=(200, 30, 40))
+    d.rectangle((180, 60, 280, 140), fill=(240, 240, 240))
+    return im
+
+
+def _model_keeps_only_the_figure(img):
+    """Model cắt hình thật hay làm vậy: giữ vật thể chính, bỏ chữ đồ họa rời."""
+    m = Image.new("L", img.size, 0)
+    ImageDraw.Draw(m).ellipse((30, 30, 130, 170), fill=255)
+    out = img.convert("RGBA")
+    out.putalpha(m)
+    return out
+
+
+def test_recover_design_brings_back_what_the_model_dropped():
+    src = _figure_and_text()
+    cut = _model_keeps_only_the_figure(src)
+    out, kept_by_model, kept = pipeline.recover_design(cut, src)
+    a = np.asarray(out)[:, :, 3]
+    assert a[100, 230] == 255                       # khối chữ quay lại, đặc
+    assert tuple(np.asarray(out)[100, 230, :3]) == (240, 240, 240)
+    assert a[100, 80] == 255                        # phần model giữ vẫn nguyên
+    assert a[10, 10] == 0 and a[100, 160] == 0      # nền vẫn trong suốt
+    assert kept_by_model < 70 and kept > 99
+
+
+def test_recover_design_keeps_the_model_inside_details_that_match_the_background():
+    """Chi tiết cùng màu nền nằm trong hình (mắt trắng trên nền trắng) là thứ model giữ được còn key
+    thì không: bước lấy lại chỉ thêm, không bao giờ bớt phần model đã giữ."""
+    im = Image.new("RGB", (200, 200), (250, 250, 250))
+    d = ImageDraw.Draw(im)
+    d.ellipse((40, 40, 160, 160), fill=(30, 60, 160))
+    d.ellipse((90, 90, 110, 110), fill=(250, 250, 250))   # 'mắt' trắng như nền
+    m = Image.new("L", im.size, 0)
+    ImageDraw.Draw(m).ellipse((40, 40, 160, 160), fill=255)
+    cut = im.convert("RGBA"); cut.putalpha(m)
+    out, _, _ = pipeline.recover_design(cut, im)
+    assert np.asarray(out)[100, 100, 3] == 255
