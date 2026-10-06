@@ -140,9 +140,18 @@ def test_server_runs_a_job_and_reports_on_it(server, workspace):
     st = json.loads(get(server, "/api/status")[1])
     assert st["done"] == ["a.png"], st["errors"]
     assert (workspace / "output" / "a_400x400_center.png").exists()
-    assert src.exists(), "trang phải giữ ảnh gốc tại chỗ để chạy lại được"
+    # Chạy xong thì ảnh rời hàng chờ sang input/done/, như dòng lệnh; vẫn chạy lại được từ đó.
+    assert not src.exists() and (workspace / "input" / "done" / "a.png").exists()
+    assert [i["waiting"] for i in ui.list_images() if i["name"] == "a.png"] == [False]
     rep = json.loads(get(server, "/api/report/a.png")[1])
     assert rep["dac"] > 80
+    body = json.dumps({"jobs": [{"name": "a.png", "settings": {"size": "300x300"}}]}).encode()
+    urllib.request.urlopen(urllib.request.Request(server + "/api/run", body, {"Content-Type": "application/json"}))  # noqa: S310
+    for _ in range(600):
+        if not json.loads(get(server, "/api/status")[1])["running"]:
+            break
+        __import__("time").sleep(0.1)
+    assert (workspace / "output" / "a_300x300_center.png").exists(), "chạy lại từ done/ phải được"
 
 
 def test_server_refuses_a_job_with_an_unknown_flag(server, workspace):
@@ -350,6 +359,7 @@ def test_report_carries_the_run_notes_for_the_page(server, workspace, monkeypatc
     rep = json.loads(get(server, "/api/report/a.png")[1])
     assert isinstance(rep["meta"]["notes"], list) and rep["meta"]["notes"]
     assert any("ảnh gốc nhỏ" in n for n in rep["meta"]["notes"])
+    assert rep["px"] == [1500, 1500]   # kích thước thật, kể cả với file tên kiểu cũ không mang khung in
 
 
 def test_runner_status_tells_the_page_what_is_queued_running_and_how_long(workspace, monkeypatch):
@@ -377,3 +387,120 @@ def test_runner_status_tells_the_page_what_is_queued_running_and_how_long(worksp
     st = r.status()
     assert set(st["took"]) == {"a.png", "b.png"} and st["queue"] == [] and st["elapsed"] == {}
     assert st["notes"]["a.png"] == ["GỢI Ý x"]   # trang bật toast từ đây, không cần đo lại file in
+
+
+def test_a_failed_run_leaves_the_image_waiting(workspace, monkeypatch):
+    """Ảnh lỗi phải còn trong hàng chờ để sửa cờ rồi chạy lại, không lẳng lặng sang done/."""
+    import time
+    def boom(src, args):
+        raise RuntimeError("hỏng")
+    monkeypatch.setattr(pipeline, "process_one", boom)
+    _design(workspace / "input" / "a.png")
+    r = ui.Runner()
+    r.start([("a.png", {})], workers=1)
+    for _ in range(100):
+        if not r.status()["running"]:
+            break
+        time.sleep(0.02)
+    assert "a.png" in r.status()["errors"] and (workspace / "input" / "a.png").exists()
+
+
+def test_runner_takes_more_jobs_while_running(workspace, monkeypatch):
+    """Bấm Chạy cho ảnh khác lúc đang chạy thì ảnh đó vào cuối hàng, không bị bỏ qua. Ảnh đã có trong
+    hàng hoặc đang chạy thì không thêm lần nữa."""
+    import time
+    gate = threading.Event()
+    monkeypatch.setattr(pipeline, "process_one", lambda src, args: gate.wait(3) and None)
+    for n in ("a.png", "b.png", "c.png"):
+        _design(workspace / "input" / n)
+    r = ui.Runner()
+    r.start([("a.png", {})], workers=1)
+    time.sleep(0.1)
+    r.start([("b.png", {}), ("a.png", {})], workers=1)
+    r.start([("c.png", {}), ("b.png", {})], workers=1)
+    st = r.status()
+    assert st["current"] == ["a.png"] and st["queue"] == ["b.png", "c.png"] and st["total"] == 3
+    gate.set()
+    for _ in range(200):
+        if not r.status()["running"]:
+            break
+        time.sleep(0.02)
+    assert sorted(r.status()["done"]) == ["a.png", "b.png", "c.png"]
+
+
+def test_outputs_for_finds_a_print_file_named_the_old_way(workspace):
+    """File in làm trước khi tên mang khung và vị trí chỉ là <tên>.png. Trang vẫn phải mở được nó."""
+    out = workspace / "output"
+    Image.new("RGBA", (8, 8)).save(out / "poster.png")
+    Image.new("RGBA", (8, 8)).save(out / "poster_4500x5400_center.png")
+    Image.new("RGBA", (8, 8)).save(out / "posterx.png")          # ảnh khác, không được lẫn vào
+    assert sorted(p.name for p in ui.outputs_for("poster")) == ["poster.png", "poster_4500x5400_center.png"]
+
+
+def test_measure_is_cached_until_the_print_file_changes(workspace, monkeypatch):
+    """Mở một ảnh không được đo lại file in 20 MB mỗi lần: đo một lần, dùng lại tới khi file đổi."""
+    import os, time
+    calls = []
+    monkeypatch.setattr(pipeline, "measure_print", lambda out, src: calls.append(out) or {"dac": len(calls)})
+    src, out = workspace / "input" / "a.png", workspace / "output" / "a_8x8_center.png"
+    _design(src)
+    Image.new("RGBA", (8, 8)).save(out)
+    assert ui.measure(out, src) == {"dac": 1}
+    assert ui.measure(out, src) == {"dac": 1} and len(calls) == 1
+    os.utime(out, (time.time() + 5, time.time() + 5))
+    assert ui.measure(out, src) == {"dac": 2}
+
+
+def test_page_config_names_every_choice_in_vietnamese():
+    """Lựa chọn hiện tiếng Việt; giá trị gửi đi vẫn là giá trị của dòng lệnh."""
+    flags = {f["name"]: f for f in ui.page_config()["flags"]}
+    for f in flags.values():
+        if f["choices"]:
+            assert set(f["labels"]) == set(f["choices"]), f["name"]
+    assert flags["place"]["labels"]["top-right"] == "góc trên phải"
+
+
+def test_delete_removes_an_image_and_everything_made_from_it(server, workspace):
+    """Xóa ảnh: ảnh gốc, mọi file in, ảnh so sánh, file tạm. Không đụng ảnh khác tên gần giống."""
+    _design(workspace / "input" / "done" / "a.png")
+    _design(workspace / "input" / "ab.png")
+    for d, n in (("output", "a_8x8_center.png"), ("output", "a.png"), ("review", "a_8x8_center.png"),
+                 ("work", "a-cut.png"), ("output", "ab_8x8_center.png")):
+        Image.new("RGBA", (8, 8)).save(workspace / d / n)
+    req = urllib.request.Request(server + "/api/delete?name=a.png", b"", method="POST")
+    with urllib.request.urlopen(req) as r:  # noqa: S310
+        assert json.loads(r.read())["removed"] == 5
+    left = sorted(p.relative_to(workspace).as_posix() for p in workspace.rglob("*.png"))
+    assert left == ["input/ab.png", "output/ab_8x8_center.png"]
+
+
+def test_delete_one_print_file_keeps_the_image(server, workspace):
+    _design(workspace / "input" / "a.png")
+    for n in ("a_8x8_center.png", "a_9x9_center.png"):
+        Image.new("RGBA", (8, 8)).save(workspace / "output" / n)
+        Image.new("RGBA", (8, 8)).save(workspace / "review" / n)
+    req = urllib.request.Request(server + "/api/delete?name=a.png&out=a_8x8_center.png", b"", method="POST")
+    urllib.request.urlopen(req)  # noqa: S310
+    assert [p.name for p in ui.outputs_for("a")] == ["a_9x9_center.png"]
+    assert not (workspace / "review" / "a_8x8_center.png").exists() and (workspace / "input" / "a.png").exists()
+
+
+def test_delete_refuses_an_image_that_is_running(server, workspace, monkeypatch):
+    _design(workspace / "input" / "a.png")
+    monkeypatch.setattr(ui.RUNNER, "busy", {"a.png"})
+    req = urllib.request.Request(server + "/api/delete?name=a.png", b"", method="POST")
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req)  # noqa: S310
+    assert e.value.code == 400 and (workspace / "input" / "a.png").exists()
+
+
+def test_page_is_read_again_when_ui_html_changes(server, workspace, tmp_path, monkeypatch):
+    """Sửa ui.html không cần khởi động lại server: trang đọc lại file khi nó đổi."""
+    import os, time
+    page = tmp_path / "ui.html"
+    page.write_text("<title>v1</title>", encoding="utf-8")
+    monkeypatch.setattr(ui, "PAGE_FILE", page)
+    assert b"v1" in get(server, "/")[1]
+    page.write_text("<title>v2</title>", encoding="utf-8")
+    os.utime(page, (time.time() + 5, time.time() + 5))
+    assert b"v2" in get(server, "/")[1]

@@ -65,13 +65,15 @@ không gửi ảnh đi đâu.
 
 ### Năm bước
 
-**1. Thêm ảnh.** Bấm **Thêm ảnh…** ở cột trái, kéo thả vào bất cứ đâu trên trang, hoặc chép vào
-`input/` rồi tải lại trang. Nhận png, jpg, webp. Ảnh gốc được giữ nguyên tại chỗ, không bị chuyển sang `input/done/`, nên chạy lại
-cùng một ảnh với cờ khác bao nhiêu lần cũng được.
+**1. Thêm ảnh.** Bấm **Thêm ảnh** ở cột trái, kéo thả vào bất cứ đâu trên trang, hoặc chép vào
+`input/` rồi tải lại trang. Nhận png, jpg, webp. Chạy xong, ảnh gốc chuyển sang `input/done/` như
+khi chạy bằng dòng lệnh, nên hàng chờ chỉ còn ảnh chưa làm. Chạy lại một ảnh trong `done/` với cờ
+khác vẫn được, bao nhiêu lần cũng được. Ảnh lỗi thì ở lại hàng chờ.
 
-**2. Chọn ảnh, xem cờ của nó.** Bấm vào thẻ bên trái. Thanh cờ trên cùng luôn hiện cờ *của riêng ảnh
-đang chọn*, không phải cờ chung. Dưới tên mỗi thẻ ghi những cờ khác mặc định, ví dụ
-`áo other · đặt top-right · gom màu 8`. Trình duyệt nhớ những cờ này cả khi bạn đóng trang, và
+**2. Chọn ảnh, xem cờ của nó.** Bấm vào thẻ bên trái, hoặc dùng phím ↑ ↓. Nút **Cài đặt** (phím S)
+mở ngăn bên phải với cờ *của riêng ảnh đang chọn*, không phải cờ chung; cờ khác mặc định có chấm
+xanh, và số cờ đã đổi hiện trên nút. Dưới tên mỗi thẻ ghi những cờ đó, ví dụ
+`áo khác màu nền ảnh, đặt góc trên phải, gom màu 8`. Trình duyệt nhớ những cờ này cả khi bạn đóng trang, và
 chỉ nhớ những gì bạn đổi khác mặc định, nên khi app đổi mặc định thì ảnh cũ đi theo mặc định mới.
 Nút **Về mặc định** bỏ mọi cờ đã nhớ của ảnh đang chọn.
 
@@ -88,16 +90,25 @@ và in ra dòng log cho biết nó chọn gì.
 | Bản in nhỏ ở vị trí khác | `đặt` = top-right, `cỡ` = 26 |
 | In một màu mực | `mực` = đen hoặc trắng |
 
-Chín cờ hay dùng nằm trên thanh trên cùng, tám cờ còn lại trong khối `cờ nâng cao`. Danh sách và giá
-trị mặc định lấy thẳng từ `parse_args`, nên thêm cờ mới vào dòng lệnh là trang có ngay.
+Ngăn cài đặt chia cờ theo nhóm (khung in và vị trí, nền và thân hình, màu và mực, độ bền DTF); cờ
+ít dùng nằm trong `Tinh chỉnh thêm` của từng nhóm. Danh sách và giá trị mặc định lấy thẳng từ
+`parse_args`, nên thêm cờ mới vào dòng lệnh là trang có ngay. Chọn `mẫu vị trí` thì hai ô Đặt và
+Cỡ % hiện luôn giá trị mẫu điền.
 
-**4. Chạy.** *Chạy ảnh này* làm một ảnh, *Chạy hàng chờ* làm hết những ảnh chưa xử lý,
-mỗi ảnh dùng cờ riêng của nó. Ô `cùng lúc` đặt số ảnh chạy song song, mặc định 2; đẩy lên 3 thì nhanh
-hơn rõ, cao hơn nữa thì máy đuối vì mỗi ảnh giữ vài mảng cỡ 5000 x 5000 trong bộ nhớ. Mỗi ảnh mất
+**4. Chạy.** *Chạy ảnh này* (phím R) làm một ảnh, *Chạy hàng chờ* làm hết những ảnh chưa xử lý,
+mỗi ảnh dùng cờ riêng của nó. Đang chạy vẫn bấm được: ảnh vào cuối hàng. Ảnh đang chạy và đang xếp
+hàng ghim ở đầu cột trái, kèm thời gian còn lại; ảnh xong hiện thông báo ở góc dưới phải, có cảnh báo
+thì thông báo ở lại tới khi đóng. `Số ảnh chạy cùng lúc` trong ngăn cài đặt (nhóm Chung cho mọi ảnh)
+mặc định 2; đẩy lên 3 thì nhanh hơn rõ, cao hơn nữa thì máy đuối vì mỗi ảnh giữ vài mảng cỡ
+5000 x 5000 trong bộ nhớ. Mỗi ảnh mất
 khoảng 14 giây, hoặc 45 giây nếu bật `thân hình đặc` vì phải chạy thêm model cắt hình.
 
-Hai khung ảnh luôn thu cả file vào cho vừa. Bấm vào ảnh để xem 1:1 bản xem trước 1400 px và cuộn
-soi mép, bấm lần nữa để thu về.
+Hai khung ảnh luôn thu cả file vào cho vừa; khung file in có dấu cắt ở bốn góc và kích thước in thật
+bằng cm. Bấm vào ảnh để xem 1:1 bản xem trước 1400 px và cuộn soi mép, bấm lần nữa để thu về. Nếu
+file đang xem làm với cờ khác cài đặt hiện tại (ví dụ khung in cũ), đầu trang ghi rõ khác ở đâu.
+
+**Xóa.** *Xóa ảnh* bỏ ảnh gốc cùng mọi file in, ảnh so sánh và file tạm của nó; *Xóa bản in này* chỉ
+bỏ file in đang xem. Cả hai phải bấm hai lần, và không xóa được ảnh đang chạy.
 
 **5. Đọc kết luận.** Ô màu trả lời thẳng, các con số bên cạnh là dẫn chứng. Dưới các con số là
 `cách` pipeline đã chọn và `cờ đã dùng`, một dòng lệnh dán lại vào terminal là ra đúng file này.
@@ -145,8 +156,9 @@ checkerboard sáng, nét trắng biến mất và trông như thủng lỗ trong
 nào cũng như nhau vì không còn chỗ để dịch. Giảm cỡ xuống, ví dụ 26%. Trang có dòng nhắc màu vàng
 ngay khi bạn rơi vào trường hợp này.
 
-**Sửa code thì phải khởi động lại trang.** Trang được nạp vào bộ nhớ lúc chạy `./run.sh --ui`. Nhấn
-`Ctrl+C` ở cửa sổ terminal rồi chạy lại. Nếu nó báo cổng đang bận, tức là vẫn còn một trang mở ở
+**Sửa code Python thì phải khởi động lại trang.** `pipeline.py` và `ui.py` được nạp vào bộ nhớ lúc
+chạy `./run.sh --ui`: nhấn `Ctrl+C` ở cửa sổ terminal rồi chạy lại. Riêng `ui.html` được đọc lại mỗi
+khi file đổi, nên sửa giao diện chỉ cần tải lại trang. Nếu nó báo cổng đang bận, tức là vẫn còn một trang mở ở
 `127.0.0.1:8765`.
 
 ### Khi có lỗi

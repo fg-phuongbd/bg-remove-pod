@@ -33,7 +33,22 @@ CACHE = pipeline.WORK_DIR / "ui"
 
 
 # ---------------------------------------------------------------- đo chất lượng
-measure = pipeline.measure_print  # cùng một phép đo với lệnh ./run.sh --audit
+_MEASURED: dict[tuple, dict] = {}
+_MEASURE_LOCK = threading.Lock()
+
+
+def measure(out: Path, src: Path) -> dict:
+    """Cùng một phép đo với lệnh ./run.sh --audit, nhưng nhớ kết quả tới khi file in hay ảnh gốc đổi.
+
+    Đo một file in 4500 x 5400 mất vài giây, mà mỗi lần chọn ảnh trên trang là một lần hỏi."""
+    key = (str(out), out.stat().st_mtime_ns, str(src), src.stat().st_mtime_ns)
+    with _MEASURE_LOCK:
+        if key in _MEASURED:
+            return dict(_MEASURED[key])
+    rep = pipeline.measure_print(out, src)
+    with _MEASURE_LOCK:
+        _MEASURED[key] = dict(rep)
+    return rep
 
 
 # ---------------------------------------------------------------- cờ cho từng ảnh
@@ -77,6 +92,22 @@ PAGE_FLAGS = {
 }
 
 
+# Lựa chọn hiện tiếng Việt trên trang; giá trị gửi về vẫn là giá trị của dòng lệnh.
+CHOICE_LABELS = {
+    "shirt": {"same": "cùng màu nền ảnh", "other": "khác màu nền ảnh", "auto": "tự chọn theo nền"},
+    "place": {"center": "giữa", "top": "trên", "bottom": "dưới", "left": "trái", "right": "phải",
+              "top-left": "góc trên trái", "top-right": "góc trên phải",
+              "bottom-left": "góc dưới trái", "bottom-right": "góc dưới phải"},
+    "preset": {"none": "không dùng", "full": "kín khổ", "chest-left": "ngực trái (logo)",
+               "chest-right": "ngực phải (logo)", "chest": "ngực giữa, cỡ A4", "back-neck": "nhãn sau gáy"},
+    "bg": {"auto": "tự nhận", "none": "đã trong suốt", "black": "key nền đen", "white": "key nền trắng",
+           "color": "key màu nền", "ai": "cắt hình bằng model"},
+    "style": {"auto": "tự chọn", "flat": "phẳng (logo, chữ)", "detail": "chi tiết (ảnh chụp)",
+              "grain": "hạt, halftone"},
+    "ink": {"none": "giữ nguyên màu", "black": "một màu đen", "white": "một màu trắng"},
+}
+
+
 def page_config() -> dict:
     """Mặc định và lựa chọn cho từng cờ, đọc thẳng từ bộ phân tích tham số của dòng lệnh."""
     defaults = vars(pipeline.parse_args([]))
@@ -90,6 +121,7 @@ def page_config() -> dict:
     }
     return {"flags": [{"name": k, "group": g, "label": label, "hint": hint,
                        "default": defaults[k], "choices": choices.get(k),
+                       "labels": {c: CHOICE_LABELS.get(k, {}).get(c, c) for c in choices[k]} if k in choices else None,
                        "kind": type(defaults[k]).__name__}
                       for k, (g, label, hint) in PAGE_FLAGS.items()],
             "presets": {k: {"place": p, "scale": sc} for k, (p, sc) in pipeline.PRESETS.items()}}
@@ -119,6 +151,9 @@ def outputs_for(stem: str) -> list[Path]:
     if not pipeline.OUTPUT_DIR.is_dir():
         return []
     hits = [p for p in pipeline.OUTPUT_DIR.glob(f"{glob.escape(stem)}_*.png")]
+    old = pipeline.OUTPUT_DIR / f"{stem}.png"  # file làm trước khi tên mang khung và vị trí
+    if old.is_file():
+        hits.append(old)
     return sorted(hits, key=lambda p: -p.stat().st_mtime)
 
 
@@ -201,8 +236,16 @@ class Runner:
                     "took": dict(self.took), "notes": dict(self.notes)}
 
     def start(self, jobs: list[tuple[str, dict]], workers: int = 2) -> None:
+        """Bắt đầu một lần chạy, hoặc nếu đang chạy thì nối việc vào cuối hàng. Ảnh đã xếp hàng hay
+        đang chạy thì không nhận thêm lần nữa."""
         with self.lock:
             if self.workers:
+                have = self.busy | {n for n, _ in self.queue}
+                for name, settings in jobs:
+                    if name not in have:
+                        self.queue.append((name, settings))
+                        have.add(name)
+                        self.total += 1
                 return
             self.reset()
             self.queue = list(jobs)
@@ -222,8 +265,12 @@ class Runner:
                 self.busy.add(name)
                 self.started[name] = time.monotonic()
             try:
-                out = pipeline.process_one(source_path(name), make_args(settings))
+                src = source_path(name)
+                out = pipeline.process_one(src, make_args(settings))
                 notes = ((pipeline.read_meta(out) or {}).get("notes") or []) if out else []
+                # Xong thì rời hàng chờ như dòng lệnh. Vẫn chạy lại được: source_path tìm cả done/.
+                if src.parent == pipeline.INPUT_DIR and src.exists():
+                    pipeline._move(src, "done")
                 with self.lock:
                     self.notes[name] = notes
                     self.done.append(name)
@@ -267,7 +314,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(204)
                 self.end_headers()
             elif route.path in ("/", "/index.html"):
-                self._send(200, PAGE.encode(), "text/html; charset=utf-8")
+                self._send(200, page().encode(), "text/html; charset=utf-8")
             elif route.path == "/api/images":
                 self._json(list_images())
             elif route.path == "/api/status":
@@ -284,7 +331,9 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     out = pick_output(parts[2], wanted)
                     rep = measure(out, src)
-                    self._json(dict(rep, **pipeline.print_verdict(rep), out=out.name,
+                    with Image.open(out) as im:  # chỉ đọc đầu file, không giải nén 20 MB
+                        px = list(im.size)
+                    self._json(dict(rep, **pipeline.print_verdict(rep), out=out.name, px=px,
                                     meta=pipeline.read_meta(out)))
             elif parts[0] == "src" and len(parts) == 2:
                 self._file(preview(source_path(parts[1]), THUMB_PX, "src"))
@@ -328,6 +377,13 @@ class Handler(BaseHTTPRequestHandler):
         if route.path == "/api/upload":
             self._upload(route)
             return
+        if route.path == "/api/delete":
+            try:
+                q = parse_qs(route.query)
+                self._json({"removed": delete_image(q["name"][0], q.get("out", [None])[0])})
+            except Exception as e:  # noqa: BLE001
+                self._json({"error": f"{type(e).__name__}: {e}"}, 400)
+            return
         if route.path != "/api/run":
             self._json({"error": "không có đường dẫn này"}, 404)
             return
@@ -340,6 +396,30 @@ class Handler(BaseHTTPRequestHandler):
             self._json(RUNNER.status())
         except Exception as e:  # noqa: BLE001
             self._json({"error": f"{type(e).__name__}: {e}"}, 400)
+
+
+def delete_image(name: str, out_name: str | None = None) -> int:
+    """Xóa một file in (kèm ảnh so sánh và bản xem trước), hoặc cả ảnh: ảnh gốc, mọi file in, ảnh so
+    sánh, file tạm. Chỉ xóa những gì trang đã liệt kê cho đúng ảnh này. Trả về số file đã xóa."""
+    src = source_path(name)
+    with RUNNER.lock:
+        if name in RUNNER.busy or any(n == name for n, _ in RUNNER.queue):
+            raise ValueError(f"{name} đang chạy hoặc đang xếp hàng, đợi xong rồi xóa")
+    outs = [pick_output(name, out_name)] if out_name else outputs_for(src.stem)
+    doomed = []
+    for o in outs:
+        # Bản xem trước theo đúng tên preview() đặt: mẫu "*-tên" sẽ vơ cả ảnh "x-tên".
+        doomed += [o, pipeline.REVIEW_DIR / o.name,
+                   CACHE / f"out-{PREVIEW_PX}-{o.stem}.png", CACHE / f"proof-{PREVIEW_PX}-{o.stem}.png"]
+    if not out_name:
+        doomed += [src, *(pipeline.WORK_DIR / f"{src.stem}{t}" for t in ("-cut.png", "-quant.png", ".svg")),
+                   CACHE / f"src-{THUMB_PX}-{src.stem}.png"]
+    removed = 0
+    for f in dict.fromkeys(doomed):
+        if f.is_file():
+            f.unlink()
+            removed += 1
+    return removed
 
 
 MAX_UPLOAD = 64 * 1024 * 1024
@@ -363,8 +443,8 @@ def serve(port: int = 8765, open_browser: bool = True) -> None:
         if e.errno != errno.EADDRINUSE:
             raise
         print(f"Cổng {port} đang bận: nhiều khả năng một trang khác đang mở ở http://127.0.0.1:{port}/\n"
-              f"Mở lại tab đó, hoặc tắt tiến trình cũ rồi chạy lại. Sau khi sửa code cũng phải tắt và "
-              f"chạy lại thì trang mới cập nhật.")
+              f"Mở lại tab đó, hoặc tắt tiến trình cũ rồi chạy lại. Sửa ui.html chỉ cần tải lại trang; "
+              f"sửa code Python thì phải tắt và chạy lại.")
         return
     url = f"http://127.0.0.1:{port}/"
     print(f"Trang xem đang chạy tại {url}  (Ctrl+C để dừng)")
@@ -378,4 +458,13 @@ def serve(port: int = 8765, open_browser: bool = True) -> None:
         server.server_close()
 
 
-PAGE = (Path(__file__).parent / "ui.html").read_text(encoding="utf-8")
+PAGE_FILE = Path(__file__).parent / "ui.html"
+_PAGE: dict = {}
+
+
+def page() -> str:
+    """ui.html, đọc lại mỗi khi file đổi: sửa giao diện chỉ cần tải lại trang, không phải tắt server."""
+    mtime = PAGE_FILE.stat().st_mtime_ns
+    if _PAGE.get("key") != (PAGE_FILE, mtime):
+        _PAGE.update(key=(PAGE_FILE, mtime), text=PAGE_FILE.read_text(encoding="utf-8"))
+    return _PAGE["text"]

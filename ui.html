@@ -41,6 +41,9 @@
   .btn.quiet { background: transparent; border-color: transparent; color: var(--mute); }
   .btn.quiet:hover { background: var(--raise); color: var(--ink); }
   .btn:disabled { opacity: .45; cursor: default; }
+  .btn.danger:hover { color: var(--fail); }
+  .btn.danger.arm { background: rgba(229,118,127,.16); border-color: var(--fail); color: var(--fail); }
+  kbd { font: 11px var(--font); padding: 0 5px; border: 1px solid var(--rule); border-bottom-width: 2px; border-radius: 4px; color: var(--mute); }
   .btn .n { background: rgba(0,0,0,.22); border-radius: 9px; padding: 0 7px; font-size: 11.5px; }
   .btn[aria-pressed="true"] { background: #5d5d63; border-color: #7a7a80; }
 
@@ -271,7 +274,8 @@
   #audit tbody tr:hover td { background: rgba(255,255,255,.03); }
 
   /* ---------- toast ---------- */
-  #toasts { position: fixed; top: 14px; right: 16px; z-index: 9; width: min(400px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
+  /* Góc dưới phải, trên dòng kết quả đo: ở trên thì toast cảnh báo (không tự tắt) che mất nút Chạy, Xóa. */
+  #toasts { position: fixed; bottom: 52px; right: 16px; z-index: 9; width: min(400px, calc(100vw - 32px)); display: flex; flex-direction: column-reverse; gap: 10px; pointer-events: none; }
   .toast {
     pointer-events: auto; background: #303033; border: 1px solid var(--rule); border-left: 4px solid var(--review);
     border-radius: 8px; padding: 11px 12px; box-shadow: 0 10px 28px rgba(0,0,0,.4); font-size: 12.5px; animation: tin .2s ease-out;
@@ -320,7 +324,7 @@
   </div>
   <div class="side-top">
     <button class="btn" id="addbtn" title="png, jpg, webp; hoặc kéo thả ảnh vào bất cứ đâu trên trang">Thêm ảnh hoặc kéo thả vào trang</button>
-    <div class="seg" id="filter" role="tablist" aria-label="Lọc danh sách">
+    <div class="seg" id="filter" role="tablist" aria-label="Lọc danh sách" title="phím ↑ ↓ để đổi ảnh">
       <button data-f="all" class="on" role="tab">Tất cả<i id="n-all"></i></button>
       <button data-f="wait" role="tab">Đang chờ<i id="n-wait"></i></button>
       <button data-f="done" role="tab">Có file in<i id="n-done"></i></button>
@@ -352,9 +356,11 @@
         <div class="sub" id="sub"></div>
       </div>
       <div class="acts">
+        <button class="btn quiet danger" id="delimg" data-confirm="Bấm lần nữa để xóa ảnh và mọi file in"
+                title="xóa ảnh gốc, mọi file in, ảnh so sánh và file tạm của ảnh này">Xóa ảnh</button>
         <a class="btn quiet" id="dl" hidden download>Tải file in</a>
-        <button class="btn" id="setbtn" aria-pressed="false" aria-controls="settings" title="cài đặt riêng cho ảnh đang chọn">Cài đặt <span class="n" id="setn" hidden></span></button>
-        <button class="btn primary" id="run" title="chạy ảnh đang chọn với cài đặt của nó">Chạy ảnh này</button>
+        <button class="btn" id="setbtn" aria-pressed="false" aria-controls="settings" title="cài đặt riêng cho ảnh đang chọn (phím S)">Cài đặt <span class="n" id="setn" hidden></span></button>
+        <button class="btn primary" id="run" title="chạy ảnh đang chọn với cài đặt của nó (phím R)">Chạy ảnh này</button>
       </div>
     </div>
 
@@ -369,6 +375,8 @@
       <label title="màu đi qua hồ sơ CMYK để thấy trước màu in xỉn đi bao nhiêu"><input type="checkbox" id="proof" class="switch"> Xem như in</label>
       <span class="spacer"></span>
       <label id="variantbox" hidden title="ảnh này có nhiều file in, chọn bản muốn xem">Bản in <select id="variant"></select></label>
+      <button class="btn quiet danger" id="delout" hidden data-confirm="Bấm lần nữa để xóa bản in này"
+              title="xóa riêng file in đang xem, giữ ảnh gốc và các bản in khác">Xóa bản in này</button>
     </div>
 
     <div id="stage">
@@ -377,7 +385,7 @@
     </div>
 
     <div id="report" hidden>
-      <button class="sum" id="sumbtn" aria-expanded="false" aria-controls="detail"><span id="sumline"></span><span class="more" id="summore">Chi tiết</span></button>
+      <button class="sum" id="sumbtn" aria-expanded="false" aria-controls="detail" title="mở / thu kết quả đo (phím D)"><span id="sumline"></span><span class="more" id="summore">Chi tiết</span></button>
       <div id="detail" hidden></div>
     </div>
     <div id="errs"></div>
@@ -405,7 +413,7 @@
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const state = { images: [], pick: null, report: null, polling: false, saved: {}, dirty: {} };
+const state = { images: [], pick: null, report: null, polling: false, saved: {} };
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* riêng tư */ } },
@@ -430,7 +438,7 @@ function control(f) {
   const id = "f_" + f.name, tip = esc(f.hint || "");
   let input;
   if (f.kind === "bool") input = `<input type="checkbox" class="switch" id="${id}">`;
-  else if (f.choices) input = `<select id="${id}">` + f.choices.map(c => `<option>${esc(c)}</option>`).join("") + `</select>`;
+  else if (f.choices) input = `<select id="${id}">` + f.choices.map(c => `<option value="${esc(c)}">${esc((f.labels || {})[c] || c)}</option>`).join("") + `</select>`;
   else if (f.kind === "float" || f.kind === "NoneType") input = `<input type="number" id="${id}" step="any" placeholder="mặc định">`;
   else input = `<input type="text" id="${id}">`;
   return `<label class="field" data-flag="${f.name}" title="${tip}"><span>${esc(f.label)}</span>${input}</label>`;
@@ -522,7 +530,6 @@ function forgetFlags() {
   if (!state.pick) return;
   delete state.saved[state.pick];
   store.set("tsp-settings", state.saved);
-  state.dirty[state.pick] = true;
   writeBar(DEFAULTS); renderList(); renderHead();
   note("Cài đặt của ảnh này đã về mặc định.");
 }
@@ -532,7 +539,11 @@ function changedFlags(name) {
   return CONFIG.flags.filter(f => s[f.name] !== undefined && s[f.name] !== null && s[f.name] !== f.default);
 }
 function tagFor(name) {
-  return changedFlags(name).map(f => f.kind === "bool" ? f.label : `${f.label} ${state.saved[name][f.name]}`).join(", ");
+  return changedFlags(name).map(f => f.kind === "bool" ? f.label : `${f.label} ${choiceLabel(f.name, state.saved[name][f.name])}`).join(", ");
+}
+function choiceLabel(name, v) {
+  const f = CONFIG.flags.find(x => x.name === name);
+  return (f && f.labels && f.labels[v]) || v;
 }
 
 // Chấm cyan cạnh cờ đã khác mặc định, và số cờ đã đổi trên nút Cài đặt.
@@ -548,8 +559,8 @@ function markChanged() {
   if (pn) {
     pn.hidden = !P;
     if (P) pn.textContent = bar.place === P.place && bar.scale === P.scale
-      ? `Đặt và Cỡ % lấy từ mẫu ${bar.preset}. Chỉnh tay hai ô này thì giá trị tay được dùng.`
-      : `Đã chỉnh tay khác mẫu ${bar.preset} (mẫu là ${P.place}, ${P.scale}%). Giá trị tay được dùng.`;
+      ? `Đặt và Cỡ % lấy từ mẫu ${choiceLabel("preset", bar.preset)}. Chỉnh tay hai ô này thì giá trị tay được dùng.`
+      : `Đã chỉnh tay khác mẫu ${choiceLabel("preset", bar.preset)} (mẫu là ${choiceLabel("place", P.place)}, ${P.scale}%). Giá trị tay được dùng.`;
   }
   // Ở cỡ 100% thiết kế đã lấp kín khung, nên neo vào góc nào cũng gần như nhau: không còn chỗ trống
   // để dịch. Đây là chỗ dễ tưởng là app hỏng nhất.
@@ -557,7 +568,7 @@ function markChanged() {
   if (h) {
     const on = bar.place && bar.place !== "center" && bar.scale >= 95;
     h.hidden = !on;
-    h.textContent = on ? `Cỡ ${bar.scale}% lấp gần kín khung, nên đặt ở "${bar.place}" trông gần như căn giữa. Giảm cỡ, ví dụ 26% cho bản in nhỏ, thì hình mới dịch vào góc.` : "";
+    h.textContent = on ? `Cỡ ${bar.scale}% lấp gần kín khung, nên đặt ở "${choiceLabel("place", bar.place)}" trông gần như căn giữa. Giảm cỡ, ví dụ 26% cho bản in nhỏ, thì hình mới dịch vào góc.` : "";
   }
 }
 
@@ -582,7 +593,7 @@ async function loadConfig() {
     if (el) el.oninput = el.onchange = () => {
       if (f.name === "preset") fillPreset(state.preset, el.value);
       remember(); markChanged(); renderList();
-      if (state.pick) { state.dirty[state.pick] = true; renderHead(); }
+      if (state.pick) renderHead();
     };
   }
 }
@@ -653,7 +664,7 @@ function renderList() {
   $("#count").textContent = imgs.length ? `${imgs.length} ảnh` : "";
   $("#n-all").textContent = imgs.length; $("#n-wait").textContent = nWait; $("#n-done").textContent = nDone;
   $("#n-queue").textContent = nWait;
-  if (!(state.run && state.run.running)) $("#runall").disabled = !nWait;
+  $("#runall").disabled = !waitingNotQueued().length;
   if (!imgs.length) {
     state.cards.clear();
     list.innerHTML = '<div class="empty">Chưa có ảnh nào.<br>Kéo thả ảnh png, jpg, webp vào trang để bắt đầu.</div>';
@@ -745,17 +756,48 @@ function renderHead() {
   $("#setfor").textContent = n || "";
   const im = n && state.images.find(i => i.name === n);
   const sub = $("#sub");
-  if (!im) { sub.innerHTML = ""; return; }
+  if (!im) { sub.innerHTML = ""; $("#delimg").hidden = true; for (const b of [$("#run"), $("#run2")]) b.disabled = true; return; }
   const st = statusOf(im);
-  const dirty = state.dirty[n] && !running(n) && queued(n) < 0;
+  const diff = running(n) || queued(n) >= 0 ? [] : mismatch(n);
   const html = `<span class="pill ${st.cls}">${st.html}</span>`
     + (st.time ? `<span>${fmt(elapsed(n))}</span>` : "")
-    + (dirty ? `<span class="dirty">Cài đặt đã đổi, chạy lại để áp dụng</span>` : "");
+    + (diff.length ? `<span class="dirty" title="${esc(diff.join("\n"))}">File đang xem khác cài đặt hiện tại: ${esc(diff.join(", "))}. Chạy lại để áp dụng</span>` : "");
   if (sub.dataset.k !== html.replace(/\d+:\d\d/g, "")) { sub.innerHTML = html; sub.dataset.k = html.replace(/\d+:\d\d/g, ""); }
   else if (st.time) sub.children[1].textContent = fmt(elapsed(n));
-  const busy = !!(state.run && state.run.running);
-  for (const b of [$("#run"), $("#run2")]) b.disabled = busy || !n;
-  $("#run").textContent = busy ? "Đang chạy…" : "Chạy ảnh này";
+  // Đang chạy vẫn bấm được: ảnh vào cuối hàng. Chỉ khóa khi chính ảnh này đang chạy hay đã xếp hàng.
+  const inRun = !!n && (running(n) || queued(n) >= 0);
+  for (const b of [$("#run"), $("#run2")]) b.disabled = !n || inRun;
+  $("#delimg").hidden = !n;
+  $("#delimg").disabled = $("#delout").disabled = inRun;   // server cũng từ chối xóa ảnh đang chạy
+  $("#run").textContent = inRun ? (running(n) ? "Đang chạy…" : "Đã xếp hàng") : (state.run && state.run.running ? "Thêm vào hàng" : "Chạy ảnh này");
+}
+
+// File in đang xem làm với cài đặt nào, so với cài đặt hiện tại của ảnh. Đọc từ chính file: tên mang
+// khung in, đoạn ghi kèm mang các cờ đã khác mặc định lúc chạy. Mẫu vị trí so qua Đặt và Cỡ % thật,
+// giống apply_preset. File làm trước khi có đoạn ghi thì chỉ so được khung in.
+const NOT_IN_FILE = new Set(["preset", "dtf_warn", "fill_limit"]);   // không đổi hình in, hoặc đã gộp vào Đặt/Cỡ
+function effective(flags) {
+  const v = Object.assign({}, DEFAULTS, flags), P = (CONFIG.presets || {})[v.preset];
+  if (P) { if (v.place === DEFAULTS.place) v.place = P.place; if (v.scale === DEFAULTS.scale) v.scale = P.scale; }
+  return v;
+}
+function mismatch(n) {
+  const r = state.report;
+  if (!r || !r.out || !state.variant) return [];
+  const out = [], cur = effective(settingsFor(n));
+  const px = printPx(), size = px && `${px[0]}x${px[1]}`;
+  if (size && /^\d+x\d+$/.test(cur.size) && size !== cur.size) out.push(`khung in ${size} → ${cur.size}`);
+  const flags = r.meta && r.meta.flags;
+  if (!flags) return out;
+  const was = effective(flags);
+  for (const f of CONFIG.flags) {
+    if (f.name === "size" || NOT_IN_FILE.has(f.name)) continue;
+    const a = was[f.name], b = cur[f.name];
+    if (a === b || (a == null && b == null) || (typeof a === "number" && Math.abs(a - b) < 1e-9)) continue;
+    const show = v => f.kind === "bool" ? (v ? "bật" : "tắt") : choiceLabel(f.name, v ?? "mặc định");
+    out.push(`${f.label} ${show(a)} → ${show(b)}`);
+  }
+  return out;
 }
 
 // Ảnh đang chọn mà đang chạy hay xếp hàng: phủ lên ô file in, để không tưởng bản cũ là kết quả mới.
@@ -825,12 +867,18 @@ $("#filter").onclick = e => {
   renderList();
 };
 
-// Kích thước in thật, đọc từ tên file in (…_4500x5400_…) ở 300 DPI, hoặc từ cờ khung in.
+// Kích thước in thật của file đang xem ở 300 DPI: số pixel server đọc từ chính file (đúng cả với file
+// tên kiểu cũ), trong lúc chờ thì đọc từ tên file (…_4500x5400_…). Không đoán theo cài đặt hiện tại.
+function printPx() {
+  if (state.report && state.report.px && state.report.out === state.variant) return state.report.px;
+  const m = (state.variant || "").match(/_(\d+)x(\d+)_/);
+  return m ? [+m[1], +m[2]] : null;
+}
 function printCm() {
-  const src = (state.variant || "").match(/_(\d+)x(\d+)_/) || String(settingsFor(state.pick || "").size || "").match(/^(\d+)x(\d+)$/);
-  if (!src) return null;
-  const cm = px => (px / 300 * 2.54).toFixed(1).replace(".", ",");
-  return { w: cm(+src[1]), h: cm(+src[2]) };
+  const px = printPx();
+  if (!px) return null;
+  const cm = v => (v / 300 * 2.54).toFixed(1).replace(".", ",");
+  return { w: cm(px[0]), h: cm(px[1]) };
 }
 
 // Đặt tờ film (dấu cắt, kích thước) đúng lên mép ảnh file in. Ảnh co giãn theo khung, nên đo lại mỗi
@@ -859,6 +907,7 @@ async function select(name, variant) {
   state.variant = variant;
   const q = variant ? `?out=${encodeURIComponent(variant)}` : "";
   $("#variantbox").hidden = outs.length < 2;
+  $("#delout").hidden = !variant;
   $("#variant").innerHTML = outs.map(o => `<option${o === variant ? " selected" : ""}>${esc(o)}</option>`).join("");
   $("#srcview").innerHTML = `<img src="/src/${encodeURIComponent(name)}" alt="Ảnh gốc ${esc(name)}">`;
   $("#dl").hidden = true;
@@ -883,6 +932,9 @@ async function select(name, variant) {
     if (state.pick !== name) return;   // người dùng đã chọn ảnh khác trong lúc đo
     if (rep && rep.out) {
       state.report = rep;
+      const c = printCm();
+      $("#outsize").textContent = c ? `${c.w} × ${c.h} cm` : "";
+      placeSheet();
       showNums(rep);
       const dl = $("#dl");
       dl.href = `/file/${encodeURIComponent(name)}${q}`;
@@ -893,6 +945,7 @@ async function select(name, variant) {
   } catch (e) { /* chưa chạy thì chưa có số, không sao */ }
   paintBg();
   paintBusy();
+  renderHead();   // dòng nhắc "khác cài đặt" cần đoạn ghi kèm của file in, chỉ có sau khi đo xong
 }
 $("#variant").onchange = () => { if (state.pick) select(state.pick, $("#variant").value); };
 $("#proof").onchange = () => { if (state.pick) select(state.pick, state.variant); };
@@ -957,6 +1010,7 @@ $("#bgpick").onclick = e => {
 async function run(names) {
   if (!names.length) { note("Chọn một ảnh trong danh sách trước."); return; }
   remember();
+  const wasRunning = !!(state.run && state.run.running);
   await api("/api/run", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -964,8 +1018,11 @@ async function run(names) {
       workers: workersPref(),
     }),
   });
-  for (const n of names) delete state.dirty[n];
   state.sawRun = true;
+  if (wasRunning) {
+    note(names.length > 1 ? `Đã thêm ${names.length} ảnh vào cuối hàng` : `Đã thêm ${names[0]} vào cuối hàng`);
+    state.run = await api("/api/status"); state.runAt = performance.now(); tick();
+  }
   poll(true);
 }
 
@@ -995,7 +1052,7 @@ async function poll(fresh = false) {
     }
     before = ended;
     const busy = st.running;
-    $("#runall").disabled = busy || !state.images.some(i => i.waiting);
+    $("#runall").disabled = !waitingNotQueued().length;
     // Lỗi hiện đủ: một dòng cuối của traceback thường không nói được vì sao.
     $("#errs").innerHTML = Object.entries(st.errors).map(([n, e]) => {
       const first = (e.trim().split("\n").pop() || "").slice(0, 160);
@@ -1016,7 +1073,8 @@ async function poll(fresh = false) {
 const runPick = () => run(state.pick ? [state.pick] : []).catch(e => note(e.message));
 $("#run").onclick = runPick;
 $("#run2").onclick = runPick;
-$("#runall").onclick = () => run(state.images.filter(i => i.waiting).map(i => i.name)).catch(e => note(e.message));
+const waitingNotQueued = () => state.images.filter(i => i.waiting && !running(i.name) && queued(i.name) < 0).map(i => i.name);
+$("#runall").onclick = () => run(waitingNotQueued()).catch(e => note(e.message));
 $("#resetflags").onclick = forgetFlags;
 $("#setbtn").onclick = () => openSettings($("#settings").hidden);
 $("#setclose").onclick = () => openSettings(false);
@@ -1055,6 +1113,61 @@ addEventListener("keydown", e => {
   if (e.key !== "Escape") return;
   if (!$("#audit").hidden) $("#audit").hidden = true;
   else if (!$("#settings").hidden) openSettings(false);
+});
+
+// Xóa: bấm lần đầu chỉ "lên cò" trong vài giây, bấm lần nữa mới xóa. Trang không dùng hộp thoại
+// confirm, và xóa thì không lấy lại được.
+function twoStep(btn, act) {
+  let timer = null;
+  const label = btn.textContent;
+  const disarm = () => { clearTimeout(timer); timer = null; btn.classList.remove("arm"); btn.textContent = label; };
+  btn.onclick = async () => {
+    if (!timer) { btn.classList.add("arm"); btn.textContent = btn.dataset.confirm; timer = setTimeout(disarm, 4000); return; }
+    disarm();
+    try { await act(); } catch (e) { toast(null, "err", "Không xóa được", [e.message]); }
+  };
+}
+twoStep($("#delimg"), async () => {
+  const n = state.pick; if (!n) return;
+  const order = [...document.querySelectorAll(".card:not([hidden])")].map(el => el.title);
+  const next = order[order.indexOf(n) + 1] || order[order.indexOf(n) - 1] || null;
+  const r = await api(`/api/delete?name=${encodeURIComponent(n)}`, { method: "POST" });
+  delete state.saved[n]; store.set("tsp-settings", state.saved);
+  note(`Đã xóa ${n} (${r.removed} file)`);
+  state.pick = null;
+  await loadList();
+  if (next && state.images.some(i => i.name === next)) await select(next); else clearView();
+});
+twoStep($("#delout"), async () => {
+  const n = state.pick, v = state.variant; if (!n || !v) return;
+  await api(`/api/delete?name=${encodeURIComponent(n)}&out=${encodeURIComponent(v)}`, { method: "POST" });
+  note(`Đã xóa bản in ${v}`);
+  await loadList();
+  await select(n);
+});
+function clearView() {
+  state.pick = null; state.variant = null; state.report = null;
+  for (const id of ["#srcview", "#outview"]) $(id).innerHTML = "";
+  $("#outview").innerHTML = '<div class="empty">Chọn một ảnh trong danh sách.</div>';
+  $("#report").hidden = $("#dl").hidden = $("#delout").hidden = $("#variantbox").hidden = true;
+  $("#outsize").textContent = "";
+  renderList(); renderHead();
+}
+
+// Phím tắt, trừ khi đang gõ trong ô nhập: ↑ ↓ (hoặc K J) đổi ảnh, R chạy, S mở cài đặt, D mở kết quả đo.
+addEventListener("keydown", e => {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest("input, select, textarea")) return;
+  const k = e.key.toLowerCase();
+  if (k === "arrowdown" || k === "arrowup" || k === "j" || k === "k") {
+    const cards = [...document.querySelectorAll(".card:not([hidden])")];
+    if (!cards.length) return;
+    e.preventDefault();
+    const i = cards.findIndex(c => c.title === state.pick), step = (k === "arrowdown" || k === "j") ? 1 : -1;
+    const next = cards[Math.max(0, Math.min(cards.length - 1, i < 0 ? 0 : i + step))];
+    if (next.title !== state.pick) { select(next.title); next.focus({ preventScroll: true }); next.scrollIntoView({ block: "nearest" }); }
+  } else if (k === "r") { if (!$("#run").disabled) runPick(); }
+  else if (k === "s") openSettings($("#settings").hidden);
+  else if (k === "d") { if (!$("#report").hidden) openDetail($("#detail").hidden); }
 });
 
 // Kéo thả ảnh vào bất cứ đâu trên trang: file được ghi thẳng vào input/ rồi hiện trong danh sách.
