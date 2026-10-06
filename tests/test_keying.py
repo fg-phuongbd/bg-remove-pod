@@ -469,3 +469,30 @@ def test_recover_design_keeps_the_model_inside_details_that_match_the_background
     cut = im.convert("RGBA"); cut.putalpha(m)
     out, _, _ = pipeline.recover_design(cut, im)
     assert np.asarray(out)[100, 100, 3] == 255
+
+
+def _face_with_a_highlight_and_a_letter_o():
+    """Nền hồng. Bên trái: 'mặt' tối có vệt da sáng gần hồng (khác nền ~27). Bên phải: chữ O có lòng
+    đúng màu nền. Model cắt hình khoét cả hai."""
+    bg = (253, 190, 213)
+    im = Image.new("RGB", (300, 160), bg)
+    d = ImageDraw.Draw(im)
+    d.ellipse((20, 20, 140, 140), fill=(120, 40, 70))
+    d.ellipse((60, 50, 100, 90), fill=(236, 172, 196))    # vệt da sáng, cách nền ~27
+    d.ellipse((170, 20, 290, 140), fill=(30, 30, 30))
+    d.ellipse((205, 55, 255, 105), fill=bg)              # lòng chữ O, cố ý trong suốt
+    m = Image.new("L", im.size, 0)
+    md = ImageDraw.Draw(m)
+    md.ellipse((20, 20, 140, 140), fill=255); md.ellipse((60, 50, 100, 90), fill=0)
+    md.ellipse((170, 20, 290, 140), fill=255); md.ellipse((205, 55, 255, 105), fill=0)
+    cut = im.convert("RGBA"); cut.putalpha(m)
+    return im, cut
+
+
+def test_patch_tinted_holes_fills_a_hole_with_design_color_and_keeps_a_counter():
+    src, cut = _face_with_a_highlight_and_a_letter_o()
+    out, patched = pipeline.patch_tinted_holes(cut, src)
+    o = np.asarray(out)
+    assert o[70, 80, 3] == 255 and tuple(o[70, 80, :3]) == (236, 172, 196)   # da được vá, đúng màu gốc
+    assert o[80, 230, 3] == 0                                                # lòng chữ O vẫn trong suốt
+    assert patched == 1

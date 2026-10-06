@@ -1110,6 +1110,42 @@ def recover_design(cut: Image.Image, original: Image.Image, floor: float = KEY_F
     return (Image.fromarray(out.round().astype(np.uint8), "RGBA"), share(c[:, :, 3]), share(out[:, :, 3]))
 
 
+def patch_tinted_holes(cut: Image.Image, original: Image.Image, min_dist: float = 15.0,
+                       rim: int = 2) -> tuple[Image.Image, int]:
+    """Vá lỗ kín trong hình mà bên trong là màu thiết kế, không phải màu nền. Trả về (ảnh, số lỗ vá).
+
+    Trên poster nền hồng, mặt người có vệt da sáng gần hồng; model và bước tinh chỉnh viền coi đó là
+    nền và khoét một lỗ 1927 px giữa trán, in lên áo xanh thì áo lộ qua mặt. Lòng chữ O thì cũng là
+    lỗ kín nhưng đúng là nền, phải giữ trong suốt. Khác nhau ở màu bên trong: lòng chữ là màu nền
+    tới mức nhiễu (viền ảnh dao động tối đa 4,5 quanh màu nền), vệt da cách nền trung vị 27. Lỗ kín
+    nào có trung vị khoảng cách tới màu nền trên `min_dist` (hoặc ba lần mức nhiễu nền, nếu lớn
+    hơn) thì là thiết kế bị thủng: lấp bằng màu gốc, đặc, kèm dải `rim` px quanh lỗ để không còn
+    vòng viền mờ cho áo lộ qua. Chỉ dùng cho đường cắt hình (áo khác màu nền): áo cùng màu nền thì
+    lỗ cho áo hiện ra vốn đúng."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    out = np.asarray(cut.convert("RGBA")).copy()
+    rgb = np.asarray(original.convert("RGB"))
+    bg = np.array(bg_color(original), dtype=np.float32)
+    dist = np.linalg.norm(rgb.astype(np.float32) - bg, axis=2)
+    noise = float(np.percentile(np.linalg.norm(_border_ring(rgb.astype(np.float32)) - bg, axis=1), 99))
+    thr = max(min_dist, 3.0 * noise)
+    labels, n = ndimage.label(out[:, :, 3] < 128)
+    if not n:
+        return cut, 0
+    edge = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
+    med = ndimage.median(dist, labels, index=np.arange(1, n + 1))
+    tinted = np.concatenate([[False], np.asarray(med) > thr])
+    tinted[edge] = False
+    patch = tinted[labels]
+    if not patch.any():
+        return cut, 0
+    patch = ndimage.binary_dilation(patch, iterations=rim) & (out[:, :, 3] < 255)
+    out[patch, :3] = rgb[patch]
+    out[patch, 3] = 255
+    return Image.fromarray(out, "RGBA"), int(tinted.sum())
+
+
 def fill_holes(cut: Image.Image, original: Image.Image) -> Image.Image:
     """Make enclosed transparent regions opaque again, restoring RGB from the original.
 
@@ -1466,6 +1502,10 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             if kept - by_model > 2:
                 warn(f"ĐÃ LẤY LẠI {kept - by_model:.0f}% thiết kế mà model cắt hình bỏ đi (chữ, đồ họa nằm "
                      f"rời vật thể chính): model chỉ giữ {by_model:.0f}%. Mở file in xem lại phần chữ.")
+            no_bg, patched = patch_tinted_holes(no_bg, original)
+            if patched:
+                warn(f"ĐÃ VÁ {patched} lỗ thủng trong hình có màu thiết kế gần màu nền (da sáng, mảng nhạt) mà "
+                     f"model coi là nền. Lỗ đúng màu nền như lòng chữ vẫn để trống. Mở file in xem lại.")
         if args.fill_holes:
             no_bg = fill_holes(no_bg, original)
             filled_in = True

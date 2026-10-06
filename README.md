@@ -201,6 +201,14 @@ mà model giữ thì vẫn giữ. Lấy lại quá 2% thì lần chạy báo `Đ
 **giữ thiết kế** (phần trăm pixel rõ ràng là mực còn trong file in). Dưới 90% thì bị chấm *Không dùng
 được*. Trên ảnh cầu thủ: 38% lên 99,2%; trên hai poster: 95% lên 98,7%, và 99,8%.
 
+**Lỗ thủng trong hình cũng được vá, nếu bên trong là màu thiết kế.** Trên poster nền hồng, mặt người
+có vệt da sáng gần màu nền; model coi đó là nền và khoét một lỗ giữa trán, in lên áo xanh thì áo lộ
+qua mặt. Lòng chữ O cũng là lỗ kín nhưng đúng màu nền và phải để trống. Pipeline phân biệt bằng màu
+bên trong lỗ: lỗ có trung vị cách màu nền trên 15 (hoặc ba lần mức nhiễu của nền, nếu lớn hơn) là
+thiết kế bị thủng, được lấp bằng màu gốc; lỗ đúng màu nền giữ trong suốt. Lần chạy báo `ĐÃ VÁ … lỗ`.
+Trên ảnh thật: lỗ trán poster hồng liền lại, mặt vát xám trong chữ của poster đen hết thủng, ảnh cầu
+thủ chỉ đổi 0,05% diện tích.
+
 Dòng đầu khi xử lý in ra quyết định này, ví dụ `nền: color | áo: khác màu nền | cách: cắt hình + tinh chỉnh viền`.
 
 Sau đó ảnh đi qua **raster** (mặc định): upscale 4 lần rồi co về khung in, giữ nguyên màu và chi
