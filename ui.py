@@ -16,6 +16,7 @@ import errno
 import glob
 import json
 import threading
+import time
 import traceback
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -90,7 +91,8 @@ def page_config() -> dict:
     return {"flags": [{"name": k, "group": g, "label": label, "hint": hint,
                        "default": defaults[k], "choices": choices.get(k),
                        "kind": type(defaults[k]).__name__}
-                      for k, (g, label, hint) in PAGE_FLAGS.items()]}
+                      for k, (g, label, hint) in PAGE_FLAGS.items()],
+            "presets": {k: {"place": p, "scale": sc} for k, (p, sc) in pipeline.PRESETS.items()}}
 
 
 def list_images() -> list[dict]:
@@ -183,12 +185,20 @@ class Runner:
         self.busy: set[str] = set()
         self.done: list[str] = []
         self.errors: dict[str, str] = {}
+        self.started: dict[str, float] = {}  # ảnh đang chạy -> lúc bắt đầu, để trang đếm giây
+        self.notes: dict[str, list[str]] = {}  # ảnh đã xong -> cảnh báo của lần chạy, trang hiện thành toast
+        self.took: dict[str, float] = {}  # ảnh đã xong (cả lỗi) -> số giây, để trang ước lượng ảnh đang chạy
+        self.total = 0
         self.workers = 0
 
     def status(self) -> dict:
         with self.lock:
+            now = time.monotonic()
             return {"running": self.workers > 0, "current": sorted(self.busy),
-                    "done": list(self.done), "errors": dict(self.errors), "left": len(self.queue)}
+                    "done": list(self.done), "errors": dict(self.errors), "left": len(self.queue),
+                    "queue": [n for n, _ in self.queue], "total": self.total,
+                    "elapsed": {n: round(now - t, 1) for n, t in self.started.items()},
+                    "took": dict(self.took), "notes": dict(self.notes)}
 
     def start(self, jobs: list[tuple[str, dict]], workers: int = 2) -> None:
         with self.lock:
@@ -196,6 +206,7 @@ class Runner:
                 return
             self.reset()
             self.queue = list(jobs)
+            self.total = len(jobs)
             self.workers = max(1, min(int(workers), len(jobs) or 1))
             count = self.workers
         for _ in range(count):
@@ -209,9 +220,12 @@ class Runner:
                     return
                 name, settings = self.queue.pop(0)
                 self.busy.add(name)
+                self.started[name] = time.monotonic()
             try:
-                pipeline.process_one(source_path(name), make_args(settings))
+                out = pipeline.process_one(source_path(name), make_args(settings))
+                notes = ((pipeline.read_meta(out) or {}).get("notes") or []) if out else []
                 with self.lock:
+                    self.notes[name] = notes
                     self.done.append(name)
             except Exception:  # noqa: BLE001 - một ảnh hỏng không được làm chết cả hàng
                 with self.lock:
@@ -219,6 +233,7 @@ class Runner:
             finally:
                 with self.lock:
                     self.busy.discard(name)
+                    self.took[name] = round(time.monotonic() - self.started.pop(name), 1)
 
 
 RUNNER = Runner()

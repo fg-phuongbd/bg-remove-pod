@@ -113,7 +113,7 @@ def get(base, path):
 def test_server_serves_the_page_and_the_listing(server, workspace):
     _design(workspace / "input" / "a.png")
     status, body = get(server, "/")
-    assert status == 200 and b"tshirt-pipeline" in body
+    assert status == 200 and b"Clearcut" in body
     status, body = get(server, "/api/images")
     assert [r["name"] for r in json.loads(body)] == ["a.png"]
     status, body = get(server, "/src/a.png")
@@ -323,6 +323,13 @@ def test_page_offers_the_presets_and_applies_them(workspace):
     assert (workspace / "output" / "a_300x300_top-right_26pc.png").exists()
 
 
+def test_page_config_carries_what_each_preset_fills_in():
+    """Trang điền Đặt và Cỡ % ngay khi chọn mẫu, nên phải biết mỗi mẫu điền gì, đọc từ chính PRESETS."""
+    presets = ui.page_config()["presets"]
+    assert presets == {k: {"place": p, "scale": s} for k, (p, s) in pipeline.PRESETS.items()}
+    assert presets["chest-left"] == {"place": "top-right", "scale": 26.0}
+
+
 def test_server_serves_a_soft_proof_of_the_print_file(server, workspace):
     if pipeline.CMYK_PROFILE is None:
         pytest.skip("không có hồ sơ CMYK trên máy này")
@@ -343,3 +350,30 @@ def test_report_carries_the_run_notes_for_the_page(server, workspace, monkeypatc
     rep = json.loads(get(server, "/api/report/a.png")[1])
     assert isinstance(rep["meta"]["notes"], list) and rep["meta"]["notes"]
     assert any("ảnh gốc nhỏ" in n for n in rep["meta"]["notes"])
+
+
+def test_runner_status_tells_the_page_what_is_queued_running_and_how_long(workspace, monkeypatch):
+    """Sidebar cần biết ảnh nào đang xếp hàng, ảnh nào đang chạy và đã chạy bao lâu, ảnh xong mất
+    bao lâu: không có những thứ đó thì người dùng chỉ thấy một nút bị xám."""
+    import time
+    gate = threading.Event()
+    out = workspace / "output" / "a_1x1_center.png"
+    out.parent.mkdir(exist_ok=True)
+    pipeline.save_print_png(Image.new("RGBA", (4, 4), (255, 0, 0, 255)), out, meta={"notes": ["GỢI Ý x"]})
+    monkeypatch.setattr(pipeline, "process_one", lambda src, args: (gate.wait(2), out)[1])
+    for n in ("a.png", "b.png"):
+        _design(workspace / "input" / n)
+    r = ui.Runner()
+    r.start([("a.png", {}), ("b.png", {})], workers=1)
+    time.sleep(0.15)
+    st = r.status()
+    assert st["total"] == 2 and st["queue"] == ["b.png"] and st["current"] == ["a.png"]
+    assert 0 < st["elapsed"]["a.png"] < 2
+    gate.set()
+    for _ in range(100):
+        if not r.status()["running"]:
+            break
+        time.sleep(0.05)
+    st = r.status()
+    assert set(st["took"]) == {"a.png", "b.png"} and st["queue"] == [] and st["elapsed"] == {}
+    assert st["notes"]["a.png"] == ["GỢI Ý x"]   # trang bật toast từ đây, không cần đo lại file in
