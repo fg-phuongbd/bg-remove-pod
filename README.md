@@ -565,6 +565,27 @@ dùng model.
 
 Cắt bỏ phần nền thừa quanh hình rồi chạy lại là đi được đường model.
 
+## Vùng mờ thành chấm halftone: `--halftone-fade`
+
+Glow, bóng đổ và airbrush trên nền đen được in bằng mực trắng mỏng dần; phần dưới 40% độ phủ nhận ít
+bột keo nên dễ bong sau vài lần giặt. Xưởng in hay đổi những vùng đó thành **chấm halftone**: mỗi chấm
+là mực đặc nên bám chắc, và nhìn từ xa mật độ chấm cho lại đúng độ đậm. `--halftone-fade` (trên trang:
+`chấm hóa vùng mờ` trong nhóm Độ bền khi in DTF) làm đúng việc đó, lưới chấm tròn 30 LPI (ô khoảng
+0,85 mm) xoay 22,5 độ. Mép khử răng cưa của mảng đặc giữ nguyên; chấm dưới 15% quá nhỏ để bám nên bị
+bỏ; vùng chỉ có vệt cực mờ do phóng ảnh thì để nguyên. Tên file thêm `_ht`.
+
+Đo trên file thật, ở khổ 4500 x 5400:
+
+| Thiết kế | Phủ thấp | Diện tích đổi trên áo đen |
+|---|---|---|
+| Ảnh cầu thủ, thân hình đặc | 2,0% → 1,2% | 0,4% |
+| Poster glow và sương phun | 7,0% → 4,4% (hết cảnh báo) | 0,9% |
+
+Phần phủ thấp còn lại phần lớn là dải mép 3 px quanh mảng đặc, cố ý giữ. Đổi lại, soi ở 1:1 thì nét
+cực mờ và mảnh thành chuỗi chấm đứt, và chấm nhỏ hơn 1 mm² được đếm vào `đốm nhỏ`: khi cờ bật, kết
+luận ghi nhận chúng là do chấm hóa thay vì cảnh báo. Mặc định tắt; bật cho thiết kế nhiều glow sẽ in
+DTF số lượng, và in thử một chiếc trước.
+
 ## Nét mảnh và đốm nhỏ: `--dtf-safe`
 
 DTF bám kém ở hai chỗ: nét mảnh hơn khoảng 0,5 mm và đốm rời nhỏ hơn khoảng 1 mm². Bột keo không

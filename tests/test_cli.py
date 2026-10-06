@@ -837,3 +837,22 @@ def test_verdict_fails_a_cutout_that_kept_too_little_of_the_design():
     assert pipeline.print_verdict(good)["muc"] == "dat"
     bad = pipeline.print_verdict(dict(good, giu=38.0))
     assert bad["muc"] == "hong" and any("62%" in w for w in bad["why"])
+
+
+def test_halftone_fade_flag_marks_the_file_and_explains_its_dots(dirs):
+    src = dirs / "input" / "glow.png"
+    yy, xx = np.mgrid[:240, :240]
+    d = np.hypot(xx - 120, yy - 120)
+    v = np.clip(255 - (d - 40) * 3, 14, 255)                # đĩa sáng, glow tan dần vào nền đen
+    Image.fromarray(np.dstack([v, v, v]).astype(np.uint8), "RGB").save(src)
+    assert pipeline.main(["--size", "240x240", "--keep-input", str(src)]) == 0
+    assert pipeline.main(["--size", "240x240", "--keep-input", "--halftone-fade", str(src)]) == 0
+    out = dirs / "output" / "glow_240x240_center_ht.png"
+    assert out.exists()
+    plain = pipeline.measure_print(dirs / "output" / "glow_240x240_center.png", src)
+    rep = pipeline.measure_print(out, src)
+    assert rep["phu_thap"] <= plain["phu_thap"]   # hiệu quả đo ở test_raster và trên ảnh thật
+    assert rep["ht"] and not plain["ht"]
+    v = pipeline.print_verdict(dict(rep, dom=5.0))
+    assert not any("đốm rời" in w for w in v["why"])        # đốm là do bật chấm hóa: chỉ ghi nhận
+    assert any("chấm halftone" in w for w in v["info"])

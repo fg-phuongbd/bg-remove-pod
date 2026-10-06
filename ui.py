@@ -87,6 +87,7 @@ PAGE_FLAGS = {
     "fill_floor": ("nâng cao", "sàn tô đặc", "không tô đặc chỗ gần màu nền hơn N; ảnh đen trắng trên nền đen thử 32"),
     "bg":         ("nâng cao", "ép cách xử lý", "ép thẳng khi nhận diện nền sai"),
     "dtf_safe":   ("nâng cao", "nới nét DTF", "nới nét và đốm mảnh hơn 0,5 mm ra 0,5 mm để không bong"),
+    "halftone_fade": ("nâng cao", "chấm hóa vùng mờ", "glow, bóng đổ phủ dưới 40% thành chấm halftone đặc để bám keo DTF; nhìn gần thấy chấm"),
     "no_clean":   ("nâng cao", "giữ mực vô hình", "không dọn alpha dưới 8 và các đốm nhỏ mà mờ"),
     "dtf_warn":   ("nâng cao", "cảnh báo DTF %", "báo khi quá N% diện tích mực dưới 40% độ phủ"),
 }

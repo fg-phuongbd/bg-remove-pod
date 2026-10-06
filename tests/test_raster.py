@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from PIL import Image
+import numpy as np
+from PIL import Image, ImageDraw
 
 import pipeline
 
@@ -155,3 +156,35 @@ def test_harden_dots_leaves_a_wide_glow_alone():
     out = np.asarray(pipeline.harden_dots(Image.fromarray(rgba, "RGBA"), 3.6))[..., 3].astype(int)
     body = ramp > 40                                    # bỏ phần đuôi rất mờ
     assert np.abs(out - rgba[..., 3].astype(int))[body].mean() < 2
+
+
+def _fade_beside_a_block():
+    """Khối đặc trắng, viền khử răng cưa 1 px, rồi một vùng glow mờ dần từ 39% xuống 0 rộng 200 px."""
+    a = np.zeros((200, 400), np.float32)
+    a[:, :100] = 255
+    a[:, 100] = 128                                         # mép khử răng cưa của khối
+    a[:, 101:301] = np.linspace(101, 0, 200)[None, :]       # glow dưới 40% độ phủ
+    rgba = np.dstack([np.full((200, 400, 3), 240, np.uint8), a.round().astype(np.uint8)])
+    return Image.fromarray(rgba, "RGBA")
+
+
+def test_halftone_fade_turns_a_faint_glow_into_solid_dots():
+    img = _fade_beside_a_block()
+    out = np.asarray(pipeline.halftone_fade(img))
+    a_in, a = np.asarray(img)[:, :, 3].astype(float), out[:, :, 3].astype(float)
+    band = (slice(None), slice(104, 301))                   # cách khối hơn 2 px: vùng glow thật
+    vals = np.unique(a[band])
+    assert set(vals) <= {0.0, 255.0}, vals                  # chỉ còn chấm đặc hoặc vải
+    keep = a_in[band] >= 0.15 * 255
+    ratio = a[band][keep].mean() / a_in[band][keep].mean()
+    assert 0.85 < ratio < 1.15, ratio                       # nhìn từ xa vẫn cùng độ đậm
+    assert a[band][~keep].max() == 0                        # chấm quá nhỏ để bám keo thì bỏ
+    assert (out[:, :101] == np.asarray(img)[:, :101]).all() # khối đặc và mép của nó không đổi
+    assert (out[:, :, :3] == 240).all()                     # màu không đổi, chỉ alpha
+
+
+def test_halftone_fade_leaves_a_solid_design_alone():
+    im = Image.new("RGBA", (120, 120), (0, 0, 0, 0))
+    ImageDraw.Draw(im).ellipse((10, 10, 110, 110), fill=(200, 30, 40, 255))
+    im = im.resize((360, 360), Image.Resampling.LANCZOS)     # mép mềm như sau khi phóng
+    assert (np.asarray(pipeline.halftone_fade(im)) == np.asarray(im)).all()

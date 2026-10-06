@@ -78,12 +78,13 @@ def load_image(path: Path) -> Image.Image:
 
 def out_name(stem: str, box: tuple[int, int], place: str, scale: float, ink: str = "none",
              dtf_safe: bool = False, *, fill: bool = False, cutout: bool = False, vector: bool = False,
-             style: str = "auto", colors: int | None = None) -> str:
+             style: str = "auto", colors: int | None = None, halftone: bool = False) -> str:
     """Tên file in: tên ảnh, khung in, vị trí, rồi một đuôi cho mỗi cờ khác mặc định làm đổi bức ảnh.
 
     Mặc định vẫn gọn (`name_4500x5100_center.png`). Mọi cờ đổi kết quả đều để dấu trong tên,
     theo thứ tự cố định, để hai lần chạy khác cờ ra hai file thay vì lần sau đè lần trước: cỡ,
-    màu mực, cắt hình (áo khác màu), thân hình đặc, vector, kiểu upscale ép tay, gom màu, nới nét.
+    màu mực, cắt hình (áo khác màu), thân hình đặc, vector, kiểu upscale ép tay, gom màu, nới nét,
+    chấm hóa vùng mờ.
     `fill` là đã tô đặc thật, không phải cờ đã bật: chốt chặn bỏ qua thì file không mang đuôi."""
     tail = "" if scale == 100.0 else f"_{scale:g}pc"
     tail += "" if ink.strip().lower() in ("", "none") else f"_ink-{ink.strip().lower().lstrip('#')}"
@@ -93,6 +94,7 @@ def out_name(stem: str, box: tuple[int, int], place: str, scale: float, ink: str
     tail += f"_{style}" if style not in ("auto", "", None) else ""
     tail += f"_c{colors}" if colors else ""
     tail += "_dtf-safe" if dtf_safe else ""
+    tail += "_ht" if halftone else ""
     return f"{stem}_{box[0]}x{box[1]}_{place}{tail}.png"
 
 
@@ -542,6 +544,49 @@ def harden_dots(img: Image.Image, grow: float) -> Image.Image:
     alpha = np.where(inside > 0, a, 0.0)
     alpha[edge] = t[edge] * np.maximum(a[edge], level[edge])
     rgba[:, :, 3] = alpha.clip(0, 255).round().astype(np.uint8)
+    return Image.fromarray(rgba, "RGBA")
+
+
+HALFTONE_LPI = 30  # 10 px mỗi ô ở 300 DPI, khoảng 0,85 mm: thô vừa đủ để chấm bám keo, mịn đủ để nhìn từ xa thành dốc
+
+
+def halftone_fade(img: Image.Image, lpi: float = HALFTONE_LPI, below: int = DTF_COVERAGE, min_cover: float = 0.15,
+                  edge_px: int = 3, angle: float = 22.5, dpi: int = DPI) -> Image.Image:
+    """--halftone-fade: glow, bóng đổ, airbrush phủ dưới 40% thành chấm halftone đặc, cho in DTF.
+
+    Mực phủ mỏng nhận ít bột keo nên bong sau vài lần giặt; trên ảnh cầu thủ, bóng đổ lên chữ là
+    phần lớn mực phủ thấp. Xưởng in đổi những vùng đó thành chấm: mỗi chấm là mực đặc, bám chắc, và
+    nhìn từ xa mật độ chấm cho lại đúng độ đậm. Lưới chấm tròn xoay 22,5 độ (góc ít tạo vân moiré
+    với sợi vải), `lpi` dòng mỗi inch; chấm ở ô có độ phủ c chiếm đúng c diện tích ô.
+
+    Chấm dưới `min_cover` nhỏ tới mức không giữ được keo, nên bỏ hẳn: mép ngoài cùng của glow mất
+    đi, bù lại không có bụi mực rơi khỏi bàn ép. Vùng mờ không có chỗ nào đậm tới `min_cover` thì
+    không phải glow mà là vệt mờ do phóng ảnh, để nguyên. Mép khử răng cưa của mảng đặc (trong `edge_px`
+    quanh mực phủ từ 40% trở lên) giữ nguyên, không thì mọi đường viền thành răng cưa chấm. Màu
+    không đổi, chỉ alpha: màu đã được giải theo nền nên chấm đặc in ra đúng màu ấy."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    rgba = np.asarray(img.convert("RGBA")).copy()
+    a = rgba[:, :, 3].astype(np.float32)
+    fade = (a > 0) & (a < below)
+    if not fade.any():
+        return img
+    fade &= ~ndimage.binary_dilation(a >= below, iterations=edge_px)
+    # Chỉ vùng mờ có chỗ đủ đậm để thành chấm: vệt mờ 1-15/255 mà Lanczos để lại cách mép vài pixel
+    # không phải glow, chấm hóa nó chỉ là xóa nó đi trên một thiết kế vốn đặc.
+    labels, n = ndimage.label(fade)
+    if n:
+        peak = ndimage.maximum(a, labels, index=np.arange(1, n + 1))
+        fade &= np.concatenate([[False], peak >= min_cover * 255])[labels]
+    cell = dpi / lpi
+    yy, xx = np.mgrid[: a.shape[0], : a.shape[1]].astype(np.float32)
+    t = np.deg2rad(angle)
+    u = (xx * np.cos(t) - yy * np.sin(t)) / cell
+    v = (xx * np.sin(t) + yy * np.cos(t)) / cell
+    d2 = (u - np.floor(u) - 0.5) ** 2 + (v - np.floor(v) - 0.5) ** 2   # bình phương khoảng cách tới tâm ô
+    cover = a / 255.0
+    dot = (np.pi * d2 < cover) & (cover >= min_cover)              # đĩa diện tích pi*r^2 = độ phủ
+    rgba[:, :, 3] = np.where(fade, np.where(dot, 255, 0), rgba[:, :, 3]).astype(np.uint8)
     return Image.fromarray(rgba, "RGBA")
 
 
@@ -1351,6 +1396,7 @@ def measure_print(out: Path, src: Path) -> dict:
     }
     meta = read_meta(out) or {}
     rep["fill"] = bool(meta.get("flags", {}).get("fill_holes")) and "thân hình đặc" in meta.get("how", "")
+    rep["ht"] = bool(meta.get("flags", {}).get("halftone_fade"))
     if meta.get("mode") in ("ai", "none"):
         return dict(rep, thua=None, sai_so=None, shirt=None, giu=meta.get("kept"))
     original = load_image(src).convert("RGB")
@@ -1538,11 +1584,13 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         # Màu nền thật, không phải màu áo dùng để xem: (20, 20, 22) chỉ để ảnh so sánh nhìn ra vải,
         # còn phép tách một màu phải hỏi đúng cái nền mà bước key đã giải ngược.
         result = one_ink(result, ink, bg_rgb(original, bg) if bg in BG_KINDS else bg_color(original))
+    if args.halftone_fade:
+        result = halftone_fade(result)
     if args.dtf_safe:
         result = min_feature(result)
     name = out_name(src.stem, box, args.place, args.scale, args.ink, args.dtf_safe,
                     fill=filled_in, cutout=(bg == "ai"), vector=args.vector, style=args.style,
-                    colors=args.colors)
+                    colors=args.colors, halftone=args.halftone_fade)
     out_path = OUTPUT_DIR / name
     low = low_coverage(clean_print(result) if not args.no_clean else result)
     if low > args.dtf_warn:
@@ -1587,7 +1635,11 @@ def print_verdict(report: dict, dtf_warn: float = DTF_WARN) -> dict:
     if report.get("manh", 0) > THIN_WARN:
         soft.append(f"{report['manh']:.0f}% mực nằm trong nét mảnh hơn {f'{MIN_FEATURE_MM:g}'.replace('.', ',')} mm, in DTF dễ bong. "
                     f"Chạy lại với --dtf-safe để nới nét, hoặc in thử rồi giặt")
-    if report.get("dom", 0) > SPECK_WARN:
+    if report.get("dom", 0) > SPECK_WARN and report.get("ht"):
+        # Đốm là chấm halftone người dùng bật cho vùng mờ: quyết định in, không phải lỗi.
+        info.append(f"{report['dom']:.1f}% mực là chấm halftone nhỏ hơn {SPECK_MM2:g} mm² do bật chấm hóa vùng mờ, "
+                    f"đúng ý. In thử để chắc chấm bám")
+    elif report.get("dom", 0) > SPECK_WARN:
         soft.append(f"{report['dom']:.1f}% mực là đốm rời nhỏ hơn {SPECK_MM2:g} mm², dễ rơi khỏi bàn ép. "
                     f"--dtf-safe nới đốm ra, hoặc chấp nhận mất vài đốm")
     if (report.get("gamut") or 0) > GAMUT_WARN:
@@ -1713,6 +1765,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--dtf-safe", action="store_true",
                    help=f"nới mọi nét và đốm mảnh hơn {MIN_FEATURE_MM:g} mm ra đúng {MIN_FEATURE_MM:g} mm bằng chính màu của nó, "
                         "để in DTF không bong. Mất một chút chi tiết ở halftone và vệt bắn. Tên file thêm _dtf-safe")
+    p.add_argument("--halftone-fade", action="store_true",
+                   help="đổi glow, bóng đổ, airbrush phủ dưới 40%% thành chấm halftone đặc (%d LPI) để in DTF "
+                        "bám keo. Nhìn gần thấy chấm; chấm dưới 15%% bị bỏ. Tên file thêm _ht" % HALFTONE_LPI)
     p.add_argument("--no-clean", action="store_true",
                    help="không dọn mực vô hình trước khi lưu (mặc định có dọn: bỏ alpha dưới 8 và các đốm "
                         "nhỏ hơn 0,5mm mà không chỗ nào đậm quá 40)")
