@@ -88,6 +88,29 @@ def test_key_white_mirror():
     assert a > 200 and r > 150 and g < 60
 
 
+def test_key_white_keeps_white_ink_on_cream():
+    # Nền kem đủ gần trắng để detect_bg gọi là 'white', nhưng chữ và logo trắng trên đó sáng hơn
+    # nền: đó là mực, không phải áo.
+    rng = np.random.default_rng(11)
+    a = (np.array([245, 242, 228]) + rng.normal(0, 1.5, (200, 200, 3))).clip(0, 255).astype(np.uint8)
+    im = Image.fromarray(a, "RGB")
+    d = ImageDraw.Draw(im)
+    d.rectangle((18, 18, 182, 182), fill=(255, 252, 243))  # vệt sáng 2 px do làm nét quá tay
+    d.rectangle((20, 20, 180, 180), fill=(20, 50, 160))    # áo xanh của con vật
+    d.rectangle((30, 30, 39, 60), fill=(255, 252, 243))    # lòng chữ O: khe nền hẹp, vệt sáng bao quanh
+    d.rectangle((32, 32, 37, 58), fill=(245, 242, 228))
+    d.rectangle((70, 70, 130, 130), fill=(254, 253, 251))  # logo trắng trên áo xanh
+    d.rectangle((185, 20, 195, 60), fill=(254, 253, 251))  # móng trắng nằm thẳng trên nền
+    assert pipeline.detect_bg(im) == "white"
+    out = pipeline.key_bg(im, "white")
+    assert out.getpixel((5, 190))[3] == 0  # nền kem vẫn trong suốt
+    assert out.getpixel((100, 18))[3] == 0 and out.getpixel((18, 100))[3] == 0  # vệt sáng không thành viền trắng
+    assert out.getpixel((30, 45))[3] == 0 and out.getpixel((34, 45))[3] == 0  # kể cả trong lòng chữ
+    for xy in ((100, 100), (190, 40)):
+        r, g, b, alpha = out.getpixel(xy)
+        assert alpha > 240 and min(r, g, b) > 240, xy
+
+
 def test_detect_style(red_circle):
     assert pipeline.detect_style(red_circle) == "flat"
     assert pipeline.detect_style(pipeline.key_bg(_dark_art(), "black")) == "flat"  # solid blocks

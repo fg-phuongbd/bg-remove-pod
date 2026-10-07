@@ -877,6 +877,36 @@ def key_bg(img: Image.Image, bg: str, floor: float = KEY_FLOOR, solid: bool = Tr
         gain = np.where(ref > lo + floor, (255.0 - lo) / np.maximum(ref - lo, 1.0), 1.0)
         w = solid_areas(img, key > lo + floor)
         alpha = alpha + w * (np.clip(alpha * gain, 0.0, 1.0) - alpha)
+    shirt = np.broadcast_to(shirt, rgb.shape)
+    if bg == "white":
+        # A cream background is close enough to white to be keyed as white, but then white ink on
+        # it is *lighter* than the background, and 255 - min says zero for it: the claws, teeth
+        # and logo of a mascot vanish into the shirt. Anything clearly lighter than the
+        # background is ink. Its color is solved against the real background, since that is what
+        # its anti-aliased rim is blended with. On a pure white background nothing can be
+        # lighter, so this changes nothing there.
+        # An over-sharpened render rings every dark edge with a light line, which the upscaler
+        # widens into wedges at the corners and inside narrow counters; taking that as ink
+        # outlines the lettering in white. The ring is the background brightened, so it keeps the
+        # background's tint, while white ink is neutral and close to 255 (on the Kentucky mascot:
+        # ring chroma 12, darkest channel 243; claws and logo chroma 0, darkest channel 254). So a
+        # light area counts as ink when most of it is neutral white; judging the whole area, not
+        # pixel by pixel, keeps the claw's own shading and rim and drops the ring even where its
+        # crest happens to reach pure white.
+        from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+        paper = np.array(bg_color(img), dtype=np.float32)
+        light = rgb.min(axis=2) - paper.min()
+        hi = float(np.percentile(_border_ring(light), 99)) + 6.0
+        top = (hi + 255.0 - paper.min()) / 2.0
+        lift = np.clip((light - hi) / max(top - hi, 1.0), 0.0, 1.0)
+        neutral = (rgb.min(axis=2) >= 255.0 - (255.0 - paper.min()) / 4.0) & (np.ptp(rgb, axis=2) <= 6.0)
+        areas, n = ndimage.label(lift > 0)
+        if n:
+            white = np.asarray(ndimage.mean(neutral, areas, np.arange(1, n + 1))) >= 0.5
+            lift = np.where(np.concatenate(([False], white))[areas], lift, 0.0)
+        shirt = np.where((lift > alpha)[:, :, None], paper, shirt)
+        alpha = np.maximum(alpha, lift)
     a = alpha[:, :, None]
     color = np.clip((rgb - (1.0 - a) * shirt) / np.where(a > 0, a, 1.0), 0, 255)
     out = np.dstack([color, alpha * 255.0]).round().astype(np.uint8)
