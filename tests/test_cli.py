@@ -19,6 +19,15 @@ def test_parse_args_flags():
     assert a.vector and a.colors == 6 and a.size == "21x29.7" and a.keep_input and a.files == ["a.png"]
 
 
+def test_help_prints(capsys):
+    # argparse định dạng help bằng %, nên một dấu % lẻ trong help của bất kỳ cờ nào làm vỡ --help
+    with pytest.raises(SystemExit) as e:
+        pipeline.parse_args(["--help"])
+    assert e.value.code == 0
+    out = capsys.readouterr().out
+    assert "--halftone-fade" in out and "dưới 40% thành" in out
+
+
 @pytest.mark.skipif(shutil.which("resvg") is None, reason="resvg not installed")
 def test_main_batch_isolates_failures(tmp_path, monkeypatch, red_circle):
     for name in ("INPUT_DIR", "OUTPUT_DIR", "REVIEW_DIR", "WORK_DIR"):

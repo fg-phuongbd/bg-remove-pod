@@ -1929,8 +1929,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help=f"nới mọi nét và đốm mảnh hơn {MIN_FEATURE_MM:g} mm ra đúng {MIN_FEATURE_MM:g} mm bằng chính màu của nó, "
                         "để in DTF không bong. Mất một chút chi tiết ở halftone và vệt bắn. Tên file thêm _dtf-safe")
     p.add_argument("--halftone-fade", action="store_true",
-                   help="đổi glow, bóng đổ, airbrush phủ dưới 40%% thành chấm halftone đặc (%d LPI) để in DTF "
-                        "bám keo. Nhìn gần thấy chấm; chấm dưới 15%% bị bỏ. Tên file thêm _ht" % HALFTONE_LPI)
+                   help=f"đổi glow, bóng đổ, airbrush phủ dưới 40%% thành chấm halftone đặc ({HALFTONE_LPI} LPI) để in DTF "
+                        "bám keo. Nhìn gần thấy chấm; chấm dưới 15%% bị bỏ. Tên file thêm _ht")
     p.add_argument("--no-clean", action="store_true",
                    help="không dọn mực vô hình trước khi lưu (mặc định có dọn: bỏ alpha dưới 8 và các đốm "
                         "nhỏ hơn 0,5mm mà không chỗ nào đậm quá 40)")
