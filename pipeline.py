@@ -752,7 +752,19 @@ def _rim_px(shape: tuple[int, ...]) -> int:
     return max(2, round(min(shape[:2]) * 0.002))
 
 
-def key_color(img: Image.Image, soft: float = 60.0, floor: float = KEY_FLOOR) -> Image.Image:
+def _neutral_white(rgb: np.ndarray, source: Image.Image | None, paper: np.ndarray) -> np.ndarray:
+    """Pixels that are white ink rather than the background brightened: neutral and near 255.
+
+    Asked of `source`, the picture before upscaling, when there is one. The upscaler pushes a
+    light cream highlight -- the facemask bars of a helmet at (242, 236, 223) on a (222, 215, 195)
+    background -- to (254, 253, 250), and from the upscaled pixels alone that is white ink."""
+    if source is not None:
+        rgb = np.asarray(source.convert("RGB").resize((rgb.shape[1], rgb.shape[0]), Image.Resampling.NEAREST)).astype(np.float32)
+    return (rgb.min(axis=2) >= 255.0 - (255.0 - paper.min()) / 4.0) & (np.ptp(rgb, axis=2) <= 6.0)
+
+
+def key_color(img: Image.Image, soft: float = 60.0, floor: float = KEY_FLOOR,
+              source: Image.Image | None = None) -> Image.Image:
     """Turn a solid colored background (e.g. light pink) into transparency, for a shirt of that
     same color. A pixel's alpha is its RGB distance from the background relative to the strongest
     design color nearby (an anti-aliased edge that is 50 % stroke + 50 % background comes out as
@@ -777,16 +789,53 @@ def key_color(img: Image.Image, soft: float = 60.0, floor: float = KEY_FLOOR) ->
     # Anti-aliased rim: pixels touching the background are blends of a nearby design color with
     # the background, so their alpha is relative to the strongest color around them. Only there:
     # between two design colors (hot pink beside black) the same rule would be wrong, and it is
-    # rejected anyway when the recovered color falls outside the gamut.
+    # rejected anyway when the recovered color falls outside the gamut. The rim is measured by
+    # true distance and hands over to the ramp gradually: a binary k-step dilation reaches into a
+    # narrow stroke as a diamond, and a slightly lighter red inside it came out part-transparent,
+    # dark diamonds along the facemask bars of a helmet on a dark shirt.
     k = _rim_px(dist.shape)
-    near_bg = ndimage.binary_dilation(dist <= lo, iterations=k)
+    rim_w = np.clip((k - ndimage.distance_transform_edt(dist > lo)) / (k / 2.0), 0.0, 1.0)
     win = max(7, round(min(dist.shape) * 0.006) | 1)
     ref = np.maximum(ndimage.maximum_filter(dist, size=win), lo + soft)
     rim_alpha = np.clip((dist - lo) / (ref - lo), 0.0, 1.0)
     safe_rim = np.where(rim_alpha > 0, rim_alpha, 1.0)[:, :, None]
     rim_color = (rgb - (1.0 - rim_alpha[:, :, None]) * bg) / safe_rim
     in_gamut = ((rim_color > -8.0) & (rim_color < 263.0)).all(axis=2)
-    alpha = np.where(near_bg & in_gamut, rim_alpha, alpha)
+    alpha = np.where(in_gamut, rim_w * rim_alpha + (1.0 - rim_w) * alpha, alpha)
+    # Faint pixels beside a stroke are a blend of that stroke with the background, so their
+    # coverage is how far they go from the background *toward the stroke's color*. The upscaler
+    # also smears off-color streaks along the edge (olive between red and cream, warm cream in
+    # the inline of a script letter): far enough from the background to key, out of gamut against
+    # the stroke so the rule above passes them over, and on a dark shirt a grey scribble along the
+    # lettering. Projected onto the stroke's color they come out faint or empty. Only near the
+    # core of a stroke (the strongest color around), and only for pixels that are faint or lie
+    # close to the line from background to the stroke's color -- a brown shading the upscaler
+    # paints into the inline of a letter does, pink beside black does not; a lighter shade of
+    # the stroke inside it is on that line too, but mostly the stroke (proj above one half), so
+    # it is left solid. A pale design color on its own is left to the rules above.
+    core = dist >= np.maximum(lo + soft, 0.8 * ndimage.maximum_filter(dist, size=win))
+    if core.any():
+        reach, (iy, ix) = ndimage.distance_transform_edt(~core, return_indices=True)
+        stroke = rgb[iy, ix] - bg
+        proj = np.clip((((rgb - bg) * stroke).sum(axis=2) / np.maximum((stroke * stroke).sum(axis=2), 1.0)), 0.0, 1.0)
+        off_line = np.linalg.norm(rgb - bg - proj[:, :, None] * stroke, axis=2)
+        use = ~core & (reach <= 2 * k) & ((dist < lo + soft) | ((off_line <= 0.5 * dist) & (proj < 0.5)))
+        alpha = np.where(use, np.minimum(alpha, proj), alpha)
+    # The light ring an over-sharpened render leaves along every edge (see the white key in
+    # key_bg): the upscaler widens it into a band cresting near white, far enough from a darker
+    # cream to key as half-opaque white ink -- every stroke outlined in white. It is the
+    # background brightened, lighter in every channel, so pale colored ink (lighter in some
+    # channels only) is not touched; white ink is told apart by being mostly neutral white.
+    # The upscaler also warms it: the cream inline of a script letter, background colored in the
+    # source, comes out as a peach band (253, 232, 210) on (222, 216, 197) -- still lighter in
+    # every channel. Only on a light background: on black every ink is lighter in every channel.
+    lighter = (rgb - bg).min(axis=2)
+    hi = float(np.percentile(_border_ring(lighter), 99)) + 6.0
+    areas, n = ndimage.label(lighter > hi) if bg.min() >= 128 else (None, 0)
+    if n:
+        neutral = _neutral_white(rgb, source, bg)
+        ring = np.asarray(ndimage.mean(neutral, areas, np.arange(1, n + 1))) < 0.5
+        alpha = np.where(np.concatenate(([False], ring))[areas], 0.0, alpha)
     alpha = np.where(dist < floor, 0.0, alpha)  # dead zone: too close to the background to be ink
     safe = np.where(alpha > 0, alpha, 1.0)[:, :, None]
     color = np.clip((rgb - (1.0 - alpha[:, :, None]) * bg) / safe, 0, 255)
@@ -839,7 +888,8 @@ def bg_rgb(img: Image.Image, bg: str) -> tuple[int, int, int]:
     return {"black": (0, 0, 0), "white": (255, 255, 255)}.get(bg) or bg_color(img)
 
 
-def key_bg(img: Image.Image, bg: str, floor: float = KEY_FLOOR, solid: bool = True) -> Image.Image:
+def key_bg(img: Image.Image, bg: str, floor: float = KEY_FLOOR, solid: bool = True,
+           source: Image.Image | None = None) -> Image.Image:
     """Turn a black (or white) background into transparency the way dark-shirt printers do.
 
     black: alpha = max(R,G,B) mapped from the background level to 255, color un-premultiplied
@@ -853,7 +903,7 @@ def key_bg(img: Image.Image, bg: str, floor: float = KEY_FLOOR, solid: bool = Tr
     keys already send anything near the background to nearly zero on their own.
     """
     if bg == "color":
-        return key_color(img, floor=floor)
+        return key_color(img, floor=floor, source=source)
     rgb = np.asarray(img.convert("RGB")).astype(np.float32)
     shirt = np.array(bg_rgb(img, bg), dtype=np.float32)
     key = rgb.max(axis=2) if bg == "black" else 255.0 - rgb.min(axis=2)
@@ -900,7 +950,7 @@ def key_bg(img: Image.Image, bg: str, floor: float = KEY_FLOOR, solid: bool = Tr
         hi = float(np.percentile(_border_ring(light), 99)) + 6.0
         top = (hi + 255.0 - paper.min()) / 2.0
         lift = np.clip((light - hi) / max(top - hi, 1.0), 0.0, 1.0)
-        neutral = (rgb.min(axis=2) >= 255.0 - (255.0 - paper.min()) / 4.0) & (np.ptp(rgb, axis=2) <= 6.0)
+        neutral = _neutral_white(rgb, source, paper)
         areas, n = ndimage.label(lift > 0)
         if n:
             white = np.asarray(ndimage.mean(neutral, areas, np.arange(1, n + 1))) >= 0.5
@@ -947,9 +997,49 @@ def see_through(keyed: Image.Image) -> float:
     return 100.0 * float((body & (a < 128)).sum()) / float(body.sum())
 
 
+def ink_horizon(ink: np.ndarray, cut: np.ndarray, horizon: float = 0.02) -> np.ndarray:
+    """How much of the figure a frame-cut side leaves standing: 1 inside, fading to 0 past it.
+
+    For each side of the frame `cut` (the figure mask) reaches, the horizon is the last ink seen
+    walking in from that side, per column (or row). It is smoothed over horizon * short side by a
+    median, then a Gaussian: a faded hem is scattered grain, and following every grain gives a
+    stepped edge or a streak where a column happens to miss them all. Columns with no ink at all
+    take the horizon of the nearest column that has some. The figure fades out over the four
+    horizon widths before the horizon and is gone at it: that is where the picture itself was
+    dissolving into the background, and laying cover past the last ink would print dark ink
+    where the design has none, a drop shadow under the figure on a light shirt. A figure cut off at the bottom has nothing faded out at its left
+    and right, so sides the mask does not reach are not looked at."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    w = 2 * max(1, round(min(ink.shape) * horizon)) + 1
+    fade = 4.0 * max(1.0, min(ink.shape) * horizon)
+    out = np.ones(ink.shape, dtype=np.float32)
+    for side in ("top", "bottom", "left", "right"):
+        m = ink if side in ("top", "bottom") else ink.T  # columns run toward the side
+        c = cut if side in ("top", "bottom") else cut.T
+        if side in ("bottom", "right"):
+            m, c = m[::-1], c[::-1]
+        if not c[0].any():
+            continue
+        has = m.any(0)
+        if not has.any():
+            continue
+        depth = np.argmax(m, 0).astype(np.float32)  # rows from the side to the first ink
+        cols = np.arange(m.shape[1])
+        depth = np.interp(cols, cols[has], depth[has]).astype(np.float32)
+        depth = ndimage.gaussian_filter1d(ndimage.median_filter(depth, w, mode="nearest"), w, mode="nearest")
+        rows = np.arange(m.shape[0], dtype=np.float32)[:, None]
+        r = np.clip((rows - depth[None, :]) / fade, 0.0, 1.0)
+        r = r * r * (3.0 - 2.0 * r)  # smoothstep: no visible line where the fade begins
+        if side in ("bottom", "right"):
+            r = r[::-1]
+        out = np.minimum(out, r if side in ("top", "bottom") else r.T)
+    return out
+
+
 def solid_core(keyed: Image.Image, original: Image.Image, silhouette: Image.Image,
                bg: tuple[int, int, int], band: float = 0.001, thin: float = 0.006,
-               floor: float = 0.0) -> Image.Image:
+               floor: float = 0.0, horizon: float = 0.02) -> Image.Image:
     """--fill-holes on the key path: cover the figure solidly, keep the key everywhere else.
 
     `floor` > 0 (the --fill-floor flag) leaves pixels closer than that to the background to
@@ -964,13 +1054,18 @@ def solid_core(keyed: Image.Image, original: Image.Image, silhouette: Image.Imag
     model's alpha for the same picture, which is coverage rather than brightness: taken as the
     floor for alpha, it makes the figure opaque right out to its own soft edge.
 
-    Two things inside the silhouette are not covered, both of them background the key already
-    dropped completely (at or below its noise ceiling, so bare shirt rather than dark ink).
-    The first is the rim: background just outside the silhouette, grown by r = band * short
-    side, which keeps the anti-aliased edge on its own soft alpha and swallows any sliver the
-    mask over-reaches into. The second is a block open to the frame border from inside the
-    silhouette -- where a cut-off picture has already faded out and the model carried the body
-    on to the edge of the frame anyway. Everything else the model calls figure is covered, an
+    Two things inside the silhouette are not covered in full. The first is the rim:
+    background the key dropped completely (at or below its noise ceiling, so bare shirt rather
+    than dark ink) just outside the silhouette, grown by r = band * short side, which keeps the
+    anti-aliased edge on its own soft alpha and swallows any sliver the mask over-reaches into.
+    The second is what lies past the ink horizon of a side the figure is cut off by (see
+    ink_horizon) -- where a cut-off picture has already faded out and the model carried the
+    body on to the edge of the frame anyway. There the cover fades out rather than stopping:
+    on a light shirt a solid figure ending in a hard line of dark ink looks sliced off. The
+    horizon is the last ink, not the last background connected to the frame: a dark jersey
+    on black is one background block running from the shoulders down through a grainy hem to
+    the frame, and taking that whole block left half the body see-through.
+    Everything else the model calls figure is covered, an
     arm dissolved into the dark or a patch of skin on its own color included: connecting to
     the outside background does not make it background, since on a same-colored shirt a deep
     shadow and the shirt are the same pixels.
@@ -996,18 +1091,21 @@ def solid_core(keyed: Image.Image, original: Image.Image, silhouette: Image.Imag
     cover = np.asarray(Image.fromarray(sil * solid, "L").resize(keyed.size, Image.Resampling.BILINEAR)).astype(np.float32)
     gone = a_key == 0  # the key found nothing here at all: shirt, not ink
     rim = _dilate(gone & (cover < 128), r)  # background outside the figure, plus its soft edge
-    labels, _ = ndimage.label(gone & ~rim)
-    ids = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
-    frame_block = np.isin(labels, ids[ids > 0])  # body the model carried on past the picture
+    ramp = ink_horizon(a_key > 0, cover >= 128, horizon)  # the picture fades out past the last ink
     orig = np.asarray(original.convert("RGB").resize(keyed.size)).astype(np.float32)
     if floor > 0:
         # Khoảng cách tới màu nền ĐO ĐƯỢC (viền ảnh), không tới `bg` mà key giải màu: nền ảnh AI
         # thường là (19, 19, 19) chứ không đen tuyệt đối, và quần xám 27 mức chỉ cách nó 14.
         shirt = np.array(bg_color(original), dtype=np.float32)
         cover = np.where(np.linalg.norm(orig - shirt, axis=2) <= floor, 0.0, cover)
-    alpha = np.maximum(a_key, np.where(rim | frame_block, 0.0, cover))
+    alpha = np.maximum(a_key, np.where(rim, 0.0, cover * ramp))
     a = (alpha / 255.0)[:, :, None]
     color = np.clip((orig - (1.0 - a) * np.array(bg, dtype=np.float32)) / np.where(a > 0, a, 1.0), 0, 255)
+    # Where the fade lays thin cover over pixels the key called bare shirt, re-solving would blow
+    # their few levels of noise up by 1/alpha into a pale haze on a light shirt. They are shirt:
+    # print them in the background color, which on a shirt of that color is what they were.
+    haze = (ramp < 1.0) & gone
+    color[haze] = np.array(bg, dtype=np.float32)
     return Image.fromarray(np.dstack([color, alpha]).round().astype(np.uint8), "RGBA")
 
 
@@ -1267,6 +1365,52 @@ def refine_rim(cut: Image.Image, original: Image.Image, band: float = 2.0, depth
     # 7% hay là bóng đổ thật của thiết kế: màu như nhau. Bóng dưới đế giày dày nhiều pixel, và khoét
     # 2 px ngoài cùng của nó làm mép bóng lởm chởm, áo lộ qua: tệ hơn để nguyên như model cắt.
     use = rim & (d_ref >= min_contrast) & (est < a) & (est >= 0.3 * 255.0)
+    if not use.any():
+        return cut
+    new_a = np.where(use, est, a)
+    w = (new_a / 255.0)[:, :, None]
+    color = np.clip((rgb - (1.0 - w) * bg) / np.where(w > 0, w, 1.0), 0, 255)
+    out[use, :3] = color[use]
+    out[:, :, 3] = new_a
+    return Image.fromarray(out.round().astype(np.uint8), "RGBA")
+
+
+def unmix_ink_rim(cut: Image.Image, original: Image.Image, min_chroma: float = 60.0,
+                  reach: float = 0.005) -> Image.Image:
+    """Ước lại độ phủ quanh nét mực có màu, theo chính màu của nét, ở vùng gần mép mặt nạ model.
+
+    refine_rim so mép với màu phía trong mặt nạ. Với chữ ký nét cọ xanh trên nền đen, mặt nạ của
+    model là một khối béo ôm cả vài pixel nền quanh nét: phía trong đó là nền, refine_rim thấy
+    không có gì để sửa, và mép pha cùng nền bị ôm giữ màu tối ở alpha 255, in lên áo sáng thành
+    chuỗi chấm đen dọc nét. Ở đây màu tham chiếu là pixel mực có sắc (độ bão hòa trên
+    `min_chroma`) gần nhất: độ phủ là hình chiếu của độ lệch khỏi nền lên hướng màu của nét, nên
+    nền thuần ra 0 và mép pha 50% ra 50%, màu được giải lại thành màu nét. Chỉ hạ alpha, không
+    bao giờ nâng; chỉ trong `reach` * cạnh ngắn quanh nét, và chỉ ở phần mặt nạ mỏng (khối ôm một
+    nét), nên chỗ nét vắt qua quần bó đen trong thân người (đen trùng nền) vẫn đặc. Mực trắng, xám,
+    đen không có hướng màu để chiếu, để nguyên cho refine_rim."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    out = np.asarray(cut.convert("RGBA")).astype(np.float32)
+    rgb = np.asarray(original.convert("RGB")).astype(np.float32)
+    bg = np.array(bg_color(original), dtype=np.float32)
+    off = rgb - bg
+    k = max(6, round(min(rgb.shape[:2]) * reach))
+    norm = np.linalg.norm(off, axis=2)
+    # Mực là pixel có sắc và đậm ít nhất 60% so với nét quanh nó: mép pha 50% không phải mực.
+    ink = ((rgb.max(axis=2) - rgb.min(axis=2) >= min_chroma) & (norm >= min_chroma)
+           & (norm >= 0.6 * ndimage.maximum_filter(norm, size=2 * k + 1)))
+    if not ink.any():
+        return cut
+    a = out[:, :, 3]
+    dist, (iy, ix) = ndimage.distance_transform_edt(~ink, return_indices=True)
+    # Chỉ trong phần mặt nạ mỏng: khối model ôm một nét mảnh dày cỡ nét cộng vài pixel nền, còn
+    # thân người thì dày; quần bó đen sâu trong chân, chỗ nét vắt qua, không bị khoét.
+    thick = ndimage.maximum_filter(ndimage.distance_transform_edt(a > 0), size=2 * k + 1)
+    zone = ~ink & (dist <= k) & (thick <= 2 * k) & (a > 0)
+    ref = off[iy, ix]
+    t = np.clip((off * ref).sum(axis=2) / np.maximum((ref * ref).sum(axis=2), 1.0), 0.0, 1.0)
+    est = np.where(t < 0.08, 0.0, t * 255.0)  # dưới 8%: nền và nhiễu, không phải mực
+    use = zone & (est < a)
     if not use.any():
         return cut
     new_a = np.where(use, est, a)
@@ -1634,6 +1778,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
             no_bg = refine_rim(no_bg, original)
         if kind != "none":
             no_bg, by_model, kept = recover_design(no_bg, original)
+            no_bg = unmix_ink_rim(no_bg, original)
             if kept - by_model > 2:
                 warn(f"ĐÃ LẤY LẠI {kept - by_model:.0f}% thiết kế mà model cắt hình bỏ đi (chữ, đồ họa nằm "
                      f"rời vật thể chính): model chỉ giữ {by_model:.0f}%. Mở file in xem lại phần chữ.")
@@ -1732,7 +1877,7 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         if photo:
             big_rgb = figure_blend(big_rgb, enlarge(original.convert("RGB"), shrink, PHOTO_MODEL), silhouette,
                                    feather=max(4, round(big_rgb.width / original.width * 2)))
-        keyed = key_bg(big_rgb, bg, args.floor)
+        keyed = key_bg(big_rgb, bg, args.floor, source=original)
         if silhouette:
             # Chốt chặn đo lại trên chính bản sẽ in. Ở ảnh gốc, nhiễu hạt đẩy vùng tối lên trên
             # ngưỡng "trùng màu áo"; model upscale làm mịn nó về sát nền, và một tấm ảnh đen

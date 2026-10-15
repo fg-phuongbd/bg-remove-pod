@@ -111,6 +111,64 @@ def test_key_white_keeps_white_ink_on_cream():
         assert alpha > 240 and min(r, g, b) > 240, xy
 
 
+def test_key_color_drops_the_light_ring_round_lettering_on_cream():
+    """Kansas City 1960: nền kem đậm (222, 215, 195) nên key theo khoảng cách màu, không phải
+    'white'. Vệt sáng 1 px quanh nét đỏ bị model upscale nới thành dải ~5 px gần trắng; khoảng
+    cách tới nền đủ xa để thành mực trắng 50%, viền trắng mọi nét chữ. Mực trắng thật vẫn giữ."""
+    rng = np.random.default_rng(3)
+    a = (np.array([222, 215, 195]) + rng.normal(0, 1.5, (200, 200, 3))).clip(0, 255).astype(np.uint8)
+    im = Image.fromarray(a, "RGB")
+    d = ImageDraw.Draw(im)
+    for i, c in enumerate([(230, 226, 205), (237, 237, 223), (240, 239, 231), (253, 255, 250)]):
+        d.rectangle((16 + i, 76 + i, 184 - i, 124 - i), fill=c)  # dải sáng do upscale, đỉnh gần trắng
+    d.rectangle((20, 80, 180, 120), fill=(200, 0, 2))           # nét đỏ
+    d.rectangle((24, 98, 176, 102), fill=(253, 232, 210))       # đường kem trong nét, upscale làm ấm lên
+    d.line((30, 97, 170, 97), fill=(224, 198, 164))             # vệt ô liu upscale bôi dọc mép nét
+    d.line((30, 103, 170, 103), fill=(201, 174, 145))           # bóng nâu upscale tự vẽ vào đường kem
+    d.rectangle((150, 140, 190, 190), fill=(10, 10, 10))        # viền đen ...
+    d.rectangle((150, 140, 156, 190), fill=(240, 100, 150))     # ... cạnh mực hồng sát nền: giữ
+    d.rectangle((60, 20, 140, 50), fill=(254, 253, 251))         # logo trắng thật trên nền kem
+    d.rectangle((60, 150, 130, 180), fill=(250, 200, 200))       # mực hồng nhạt: không phải vệt sáng
+    assert pipeline.detect_bg(im) == "color"
+    out = pipeline.key_bg(im, "color")
+    for xy in ((100, 77), (100, 78), (100, 79), (17, 100), (182, 100), (100, 100)):
+        assert out.getpixel(xy)[3] == 0, (xy, out.getpixel(xy))  # vệt sáng không thành viền trắng
+    for xy in ((100, 97), (100, 103)):
+        assert out.getpixel(xy)[3] < 100, (xy, out.getpixel(xy))  # vệt lệch màu: mờ theo màu nét, không đục
+    assert out.getpixel((100, 90)) == (200, 0, 2, 255)
+    assert out.getpixel((153, 165))[3] > 240                   # hồng cạnh đen không bị chiếu về màu đen
+    assert out.getpixel((100, 35))[3] > 240
+    assert out.getpixel((100, 165))[3] > 60  # hồng nhạt gần nền: mờ theo khoảng cách như cũ, không bị bỏ
+
+
+def test_key_color_judges_white_ink_on_the_picture_before_upscaling():
+    """Song chắn mũ Kansas City: thanh kem sáng hơn nền chút ít (242, 236, 223), model upscale
+    đẩy lên trắng tinh (254, 253, 250). Nhìn bản đã phóng thì đó là mực trắng; ảnh gốc nói không."""
+    src = Image.new("RGB", (60, 60), (222, 215, 195))
+    d = ImageDraw.Draw(src)
+    d.rectangle((10, 10, 50, 22), fill=(200, 0, 2))
+    d.rectangle((14, 15, 46, 17), fill=(242, 236, 223))         # thanh chắn kem sáng
+    d.rectangle((10, 35, 30, 50), fill=(254, 253, 251))         # mực trắng thật
+    up = src.copy()
+    ImageDraw.Draw(up).rectangle((14, 15, 46, 17), fill=(254, 253, 250))
+    up = up.resize((240, 240), Image.Resampling.NEAREST)
+    assert pipeline.key_bg(up, "color").getpixel((120, 64))[3] > 200      # không có ảnh gốc: tưởng mực trắng
+    out = pipeline.key_bg(up, "color", source=src)
+    assert out.getpixel((120, 64))[3] == 0
+    assert out.getpixel((80, 170))[3] > 240
+
+
+def test_key_color_keeps_a_lighter_shade_inside_a_narrow_stroke_solid():
+    """Thanh chắn mũ Kansas City: thanh đỏ hẹp, trong lòng có dải đỏ nhạt hơn chút. Vùng mép nới
+    vào lòng thanh thành hình thoi, đỏ nhạt trong đó ra bán trong suốt: hình thoi sẫm trên áo tối."""
+    im = Image.new("RGB", (400, 400), (222, 215, 195))
+    d = ImageDraw.Draw(im)
+    d.rectangle((50, 190, 350, 214), fill=(190, 5, 10))         # thanh đỏ rộng 25 px
+    d.rectangle((50, 199, 350, 205), fill=(215, 40, 40))        # dải đỏ nhạt trong lòng
+    a = np.asarray(pipeline.key_bg(im, "color"))[:, :, 3]
+    assert (a[196:209, 60:340] == 255).all(), a[196:209, 200]
+
+
 def test_detect_style(red_circle):
     assert pipeline.detect_style(red_circle) == "flat"
     assert pipeline.detect_style(pipeline.key_bg(_dark_art(), "black")) == "flat"  # solid blocks
@@ -267,8 +325,36 @@ def test_solid_core_leaves_the_frame_block_to_the_key():
     out = pipeline.solid_core(keyed, im, silhouette, pipeline.bg_rgb(im, "black"))
     assert out.getpixel((150, 110)) == (4, 6, 12, 255)          # fold shadow: solid ink
     assert out.getpixel((150, 280))[3] == 0                     # body the model invented below the picture: gone
-    assert out.getpixel((150, 232))[3] == 255                   # the hem itself, dim but present: solid ink
     assert out.getpixel((150, 60)) == (30, 60, 220, 255)
+    hem = np.asarray(out)[180:250, 150, 3].astype(int)          # the figure dissolves toward its last ink
+    assert hem[0] == 255 and 0 < hem[52] < 255, hem              # the hem itself, dim but present: kept
+    ramp = pipeline.ink_horizon(np.asarray(keyed)[:, :, 3] > 0, np.asarray(silhouette) >= 128)
+    assert (np.diff(ramp[180:250, 150]) <= 0).all()              # the cover fades, no edge of its own
+    assert (hem[62:] == 0).all(), hem                            # nothing past the last ink: no drop shadow
+
+
+def test_solid_core_fills_a_dark_jersey_open_to_the_frame_through_its_faded_hem():
+    """Gritty poster cut off at the bottom: the jersey is background-dark, its few bright
+    streaks are the only ink, and the hem fades out in scattered grain right to the border. The
+    dark jersey is one block running down to the frame -- but it has ink below it, so it is
+    figure, not picture that faded out. Only what lies past the last ink is the frame block."""
+    rng = np.random.default_rng(5)
+    im = Image.new("RGB", (300, 300), (0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rectangle((100, 40, 200, 70), fill=(220, 220, 220))       # shoulder stripe: bright ink
+    for x in range(110, 200, 20):                               # a few bright streaks in a black jersey
+        d.line((x, 70, x + 6, 230), fill=(0, 120, 90), width=2)
+    for _ in range(140):                                        # hem: grain thinning out to y 270
+        x, y = int(rng.integers(100, 201)), int(rng.integers(230, 270))
+        d.point((x, y), fill=(200, 200, 200))
+    keyed = pipeline.key_bg(im, "black")
+    silhouette = Image.new("L", im.size, 0)
+    ImageDraw.Draw(silhouette).rectangle((98, 38, 202, 299), fill=255)
+    out = pipeline.solid_core(keyed, im, silhouette, pipeline.bg_rgb(im, "black"))
+    a = np.asarray(out)[:, :, 3]
+    jersey = a[80:220, 105:196]
+    assert (jersey == 255).mean() > 0.97, f"áo tối bị khoét {(jersey < 255).mean():.0%}"
+    assert a[290, 150] == 0                                     # past the last grain: still gone
 
 
 def test_solid_core_composites_back_to_the_original_on_the_shirt():
@@ -544,6 +630,29 @@ def test_refine_rim_unmixes_the_band_the_model_called_solid():
     assert out[:, :, 3][blend].mean() < 220                    # độ phủ mép theo mức pha thật
     inner = r < 35
     assert (out[inner] == np.asarray(cut)[inner]).all()       # bên trong không đổi
+
+
+def test_unmix_ink_rim_clears_background_the_model_wrapped_round_a_colored_stroke():
+    """Chữ ký nét cọ xanh trên nền đen: mặt nạ model là một khối béo ôm cả nền quanh nét, nên phía
+    trong mà refine_rim so sánh lại là nền, và mép pha cùng nền bị ôm in thành chuỗi chấm đen dọc
+    nét trên áo sáng. Độ phủ ở đó phải ước theo màu của nét."""
+    bg, teal = np.array([18, 17, 16]), np.array([0, 150, 160])
+    yy, xx = np.mgrid[:80, :120]
+    cover = np.clip(4.5 - np.abs(yy - 40.0), 0, 1)[:, :, None]          # nét ngang dày 8 px, mép pha 1 px
+    rgb = (teal * cover + bg * (1 - cover)).round()
+    rgb[:, 90:] = (10, 10, 10)                                           # quần bó đen, nét vắt qua
+    rgb[36:45, 90:] = teal
+    src = Image.fromarray(rgb.astype(np.uint8), "RGB")
+    a = np.zeros((80, 120), np.uint8)
+    a[30:51, 5:90] = 255                                                 # khối model ôm nét, béo 5 px
+    a[:, 90:] = 255                                                      # chân: model giữ cả khối
+    cut = src.convert("RGBA"); cut.putalpha(Image.fromarray(a))
+    out = np.asarray(pipeline.unmix_ink_rim(cut, src)).astype(float)
+    assert out[32, 40, 3] == 0                                           # nền model ôm: trong suốt
+    edge = out[44, 40]                                                   # mép pha 50%
+    assert 90 < edge[3] < 165 and edge[1] > 120, edge                    # độ phủ theo mức pha, màu là màu nét
+    assert (out[38:43, 10:85] == np.asarray(cut)[38:43, 10:85]).all()    # lòng nét không đổi
+    assert (out[46:60, 100:, 3] == 255).all()                            # quần bó sâu trong thân: giữ đặc
 
 
 def test_refine_rim_keeps_a_dark_design_edge():
