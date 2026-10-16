@@ -49,6 +49,11 @@ model thì app vẫn chạy, nhưng lần chạy báo `THIẾU MODEL … Chạy 
    chọn model upscale. Dòng log in ra nó đã chọn gì, và mỗi file in **ghi lại bộ cờ đã dùng** trong
    chính nó, xem mục **File in nhớ cách nó được tạo**.
 
+   Ngôi sao watermark của Gemini ở góc dưới phải được tự xoá trước mọi bước khác, log in ra
+   `đã xoá watermark Gemini ở góc ảnh`. Sao là lớp trắng mờ có độ phủ biết trước, nên pipeline gỡ ngược
+   lớp đó ra chứ không vá màu: chỗ bị đè trở lại đúng như cũ, kể cả khi sao nằm trên hình. Hiện chỉ
+   nhận ngôi sao của Gemini; watermark kiểu khác vẫn còn trong file in.
+
 3. Lấy kết quả:
 
    - `output/<tên>_4500x5400_center.png`: file in, nền trong suốt, 300 DPI. Tên mang theo khung in

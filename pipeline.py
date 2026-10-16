@@ -7,6 +7,7 @@ màu rồi trace vector (vtracer) và vẽ lại (resvg) cho minh họa phẳng.
 from __future__ import annotations
 
 import argparse
+import functools
 import glob
 import json
 import re
@@ -74,6 +75,68 @@ def load_image(path: Path) -> Image.Image:
     im = Image.open(path)
     im.load()
     return ImageOps.exif_transpose(im).convert("RGBA")
+
+
+@functools.cache
+def _sparkle(size: int) -> Image.Image:
+    """Ngôi sao watermark của Gemini, cỡ `size` px: độ phủ (alpha) của lớp trắng Gemini đè lên ảnh.
+
+    Đo từ một ảnh Gemini 2048 px trên nền phẳng (36, 36, 36), nơi sao rộng 96 px: thân sao phủ
+    khoảng 30 %, viền sáng hơn chút, tới 36 %."""
+    im = Image.open(ROOT / "assets" / "gemini_sparkle.png")
+    return im if im.width == size else im.resize((size, size), Image.Resampling.LANCZOS)
+
+
+def remove_watermark(img: Image.Image, min_score: float = 0.85) -> tuple[Image.Image, str | None]:
+    """Gỡ ngôi sao watermark của Gemini ở góc dưới phải, trả về (ảnh, "Gemini") hoặc (img, None).
+
+    Sao là lớp trắng phủ một phần: điểm ảnh = gốc * (1 - a) + 255 * a, với a lấy từ mẫu. Biết a
+    thì giải ngược được gốc = (điểm ảnh - 255 a) / (1 - a), nên chỗ bị đè trở lại đúng như cũ,
+    kể cả khi sao nằm trên hình thiết kế chứ không chỉ trên nền -- không phải vá bằng màu xung quanh.
+    Tìm bằng tương quan chuẩn hoá với mẫu ở vài cỡ trong góc; một chấm trắng của thiết kế có thể
+    na ná hình, nên còn phải sáng lên đúng bằng lớp trắng của Gemini (k gần 1), không phải đặc."""
+    from scipy.signal import fftconvolve  # noqa: PLC0415 - heavy import kept local
+
+    rgb = np.asarray(img.convert("RGB")).astype(np.float32)
+    h, w = rgb.shape[:2]
+    rh, rw = max(1, round(h * 0.3)), max(1, round(w * 0.3))
+    region = rgb[h - rh:, w - rw:].mean(axis=2)
+    best = None
+    for size in (32, 48, 64, 72, 96, 128, 144, 192):
+        if size * 2 > min(rh, rw):
+            continue
+        t = np.asarray(_sparkle(size)).astype(np.float32) / 255.0
+        tz = t - t.mean()
+        ones = np.ones_like(t)
+        s1 = fftconvolve(region, ones[::-1, ::-1], mode="valid")
+        s2 = fftconvolve(region * region, ones[::-1, ::-1], mode="valid")
+        var = s2 - s1 * s1 / t.size
+        # Một ô nền phẳng có phương sai bằng 0, và sai số làm tròn của FFT chia cho nó thành điểm
+        # số hàng trăm: chỉ chấm ô nào thực sự có hình gì đó (lệch chuẩn từ 1 mức sáng trở lên).
+        flat = var < t.size
+        score = fftconvolve(region, tz[::-1, ::-1], mode="valid") / np.sqrt(np.maximum(var, 1.0) * (tz * tz).sum())
+        score = np.where(flat, 0.0, score)
+        y, x = np.unravel_index(int(np.argmax(score)), score.shape)
+        if best is None or score[y, x] > best[0]:
+            best = (float(score[y, x]), size, int(y) + h - rh, int(x) + w - rw)
+    if best is None or best[0] < min_score:
+        return img, None
+    _, size, y, x = best
+    t = np.asarray(_sparkle(size)).astype(np.float32) / 255.0
+    patch = rgb[y:y + size, x:x + size]
+    # Sáng lên bao nhiêu so với lớp trắng của mẫu: nền dưới sao lấy ở vòng ngay ngoài nó.
+    ring = np.concatenate([rgb[max(y - 3, 0):y, x:x + size].reshape(-1, 3), rgb[y + size:y + size + 3, x:x + size].reshape(-1, 3),
+                           rgb[y:y + size, max(x - 3, 0):x].reshape(-1, 3), rgb[y:y + size, x + size:x + size + 3].reshape(-1, 3)])
+    base = np.median(ring, axis=0)
+    lift = (patch - base).mean(axis=2)
+    room = (255.0 - base).mean() * t
+    k = float((lift * room).sum() / max((room * room).sum(), 1e-6))
+    if not 0.6 <= k <= 1.5:
+        return img, None
+    a = np.clip(t, 0.0, 0.95)[:, :, None]
+    out = np.asarray(img.convert("RGBA")).copy()
+    out[y:y + size, x:x + size, :3] = np.clip((patch - 255.0 * a) / (1.0 - a), 0, 255).round().astype(np.uint8)
+    return Image.fromarray(out, "RGBA"), "Gemini"
 
 
 def out_name(stem: str, box: tuple[int, int], place: str, scale: float, ink: str = "none",
@@ -860,18 +923,32 @@ def solid_areas(img: Image.Image, ink: np.ndarray, tol: int = 14,
     from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
 
     im = img.convert("RGB").copy()
-    im.thumbnail((scale, scale))
+    # Sampled, not averaged: the facemask of a helmet is red bars split by dark lines thinner
+    # than a thumbnail pixel, and averaging blends the two into dark reds that count as other
+    # inks -- the bars failed the test and printed see-through in patches beside the shell.
+    # A sampled pixel is either bar or line; a glow still varies from sample to sample.
+    im.thumbnail((scale, scale), Image.Resampling.NEAREST)
     a = np.asarray(im).astype(np.int16)
     h, w = a.shape[:2]
     win = max(5, round(max(h, w) * 0.015) | 1)
     r = win // 2
+    mask = np.asarray(Image.fromarray((ink * 255).astype(np.uint8), "L").resize((w, h), Image.Resampling.BILINEAR)) >= 128
     pad = np.pad(a, ((r, r), (r, r), (0, 0)), mode="edge")
+    pad_ink = np.pad(mask, r, mode="edge")
     count = np.zeros((h, w), np.int16)
+    inked = np.zeros((h, w), np.int16)
     for dy in range(win):
         for dx in range(win):
-            count += np.abs(pad[dy:dy + h, dx:dx + w] - a).max(axis=2) <= tol
-    mask = np.asarray(Image.fromarray((ink * 255).astype(np.uint8), "L").resize((w, h), Image.Resampling.BILINEAR)) >= 128
-    solid = (count >= round(share * win * win)) & mask
+            near = pad_ink[dy:dy + h, dx:dx + w]
+            count += near & (np.abs(pad[dy:dy + h, dx:dx + w] - a).max(axis=2) <= tol)
+            inked += near
+    # The share is of the ink in the window, not of the whole window: a stripe or an outline
+    # narrower than the window sees mostly background, and against the whole window it failed
+    # the test while the letter it rings passed -- the same red printed opaque in the fill and
+    # at 75 % in the stripes. Background is not a different color of ink, so it doesn't count
+    # against flatness; a glow still fails, its inked neighbours being other steps of its ramp.
+    # At least a line's worth of ink across the window, so a lone speck isn't a flat area.
+    solid = (count >= np.maximum(share * inked, win)) & mask
     # r reaches the edge of a flat area, whose own window straddled the boundary and so failed
     # the test; keep stops at the ink's own anti-aliased rim, so no shape grows.
     keep = ndimage.binary_dilation(mask, iterations=2)
@@ -920,12 +997,21 @@ def key_bg(img: Image.Image, bg: str, floor: float = KEY_FLOOR, solid: bool = Tr
         # re-solved below at whatever alpha comes out, so nothing about the printed result moves.
         from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
 
+        # Both questions -- is this flat, and how bright is its color -- are asked of `source`,
+        # the picture before upscaling, when there is one. The upscaler sharpens a thin stripe
+        # into a core with brighter edges: 199 between rows of 214 on a red at (200, 28, 50).
+        # Judged on that, stretches of the stripe were a fade, and where they were not, the
+        # edges set the brightness the core was a fraction of -- pink patches at 75 % and a
+        # core at 87 % beside an opaque fill of the same red.
+        flat = img if source is None else source.convert("RGB").resize(img.size, Image.Resampling.BILINEAR)
+        frgb = np.asarray(flat.convert("RGB")).astype(np.float32)
+        fkey = frgb.max(axis=2) if bg == "black" else 255.0 - frgb.min(axis=2)
         win = max(3, round(min(key.shape) * 0.003) | 1)
-        ref = ndimage.maximum_filter(key, size=win)  # the flat color a rim pixel is a fraction of
+        ref = ndimage.maximum_filter(fkey, size=win)  # the flat color a rim pixel is a fraction of
         # Only where that color is ink itself: next to nothing, the gain would be unbounded and
         # a single stray pixel just above the noise would come out opaque.
         gain = np.where(ref > lo + floor, (255.0 - lo) / np.maximum(ref - lo, 1.0), 1.0)
-        w = solid_areas(img, key > lo + floor)
+        w = solid_areas(flat, key > lo + floor)
         alpha = alpha + w * (np.clip(alpha * gain, 0.0, 1.0) - alpha)
     shirt = np.broadcast_to(shirt, rgb.shape)
     if bg == "white":
@@ -959,8 +1045,41 @@ def key_bg(img: Image.Image, bg: str, floor: float = KEY_FLOOR, solid: bool = Tr
         alpha = np.maximum(alpha, lift)
     a = alpha[:, :, None]
     color = np.clip((rgb - (1.0 - a) * shirt) / np.where(a > 0, a, 1.0), 0, 255)
+    if solid and source is not None:
+        color, alpha = _flat_color(color, alpha, w, source, bg, floor)
     out = np.dstack([color, alpha * 255.0]).round().astype(np.uint8)
     return Image.fromarray(out, "RGBA")
+
+
+def _flat_color(color: np.ndarray, alpha: np.ndarray, w: np.ndarray, source: Image.Image, bg: str,
+                floor: float) -> tuple[np.ndarray, np.ndarray]:
+    """Color and coverage of the flat areas (weight `w`) taken from `source`, the picture before
+    upscaling; the upscaled picture only gives the shape of their edges.
+
+    The upscaler sharpens a flat stroke into a darker core between brighter edges: (204, 31, 50)
+    inside a stripe, (219, 27, 44) along it, where the source is (200, 31, 50) throughout -- on
+    the shirt every stripe and outline reads as ringed in a lighter red. So the color is the
+    source's own flat color, carried out from the solid core of each area so its anti-aliased rim
+    gets the same color; only where the two are close, as a boundary between two inks the upscaler
+    drew sharper than the source is left to the upscaler. And the dip in the core kept it at
+    96 % beside opaque edges: inside what the source has solid -- shrunk by a source pixel and
+    a bit, so no rim moves -- coverage is full."""
+    from scipy import ndimage  # noqa: PLC0415 - heavy import kept local
+
+    sk = np.asarray(key_bg(source.convert("RGB"), bg, floor)).astype(np.float32)
+    core = sk[:, :, 3] >= 230
+    if not core.any():
+        return color, alpha
+    size = (color.shape[1], color.shape[0])
+    _, (iy, ix) = ndimage.distance_transform_edt(~core, return_indices=True)
+    filled = Image.fromarray(sk[iy, ix, :3].round().astype(np.uint8), "RGB")
+    filled = np.asarray(filled.resize(size, Image.Resampling.BILINEAR)).astype(np.float32)
+    near = w * np.clip((50.0 - np.linalg.norm(color - filled, axis=2)) / 25.0, 0.0, 1.0)
+    color = color + near[:, :, None] * (filled - color)
+    inside = np.asarray(Image.fromarray(core.astype(np.uint8) * 255, "L").resize(size, Image.Resampling.BILINEAR)) / 255.0
+    inside = ndimage.minimum_filter(inside, size=2 * (size[0] // source.width + 1) + 1)
+    alpha = np.maximum(alpha, near * inside)
+    return color, alpha
 
 
 def redundant_ink(keyed: Image.Image, original: Image.Image, bg: tuple[int, int, int]) -> float:
@@ -1710,7 +1829,7 @@ def measure_print(out: Path, src: Path) -> dict:
     rep["ht"] = bool(meta.get("flags", {}).get("halftone_fade"))
     if meta.get("mode") in ("ai", "none"):
         return dict(rep, thua=None, sai_so=None, shirt=None, giu=meta.get("kept"))
-    original = load_image(src).convert("RGB")
+    original = remove_watermark(load_image(src))[0].convert("RGB")  # so với ảnh đã xoá watermark, như file in
     bg = np.array(bg_color(original), dtype=np.float32)
     a = (alpha / 255.0)[:, :, None]
     on_shirt = o[:, :, :3] * a + bg * (1 - a)
@@ -1747,7 +1866,9 @@ def process_one(src: Path, args: argparse.Namespace) -> Path:
         notes.append(msg)
     box = target_box_px(args.size)
     inner = art_box(box, args.scale)
-    original = load_image(src)
+    original, mark = remove_watermark(load_image(src))
+    if mark:
+        print(f"  đã xoá watermark {mark} ở góc ảnh")
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     # Model upscale được UPSCALE lần; xa hơn là Lanczos kéo giãn, và viền mềm đi. Đo trên cả
     # ảnh gốc là mức thấp nhất: hình bị cắt về khung bao rồi mới phóng, nên thực tế còn phóng hơn.

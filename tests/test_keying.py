@@ -79,6 +79,66 @@ def test_key_black_leaves_a_fade_thinning_into_the_shirt():
     assert np.abs(back - np.asarray(im).astype(float)).max() < 16
 
 
+def test_key_black_lifts_thin_strokes_like_the_fill_they_match():
+    """Thin stripes and an outline in the same flat red as a filled letter are the same ink: on
+    the Kansas City render they came out at 75 % alpha beside an opaque fill, pink and patchy."""
+    red = (200, 28, 50)
+    im = Image.new("RGB", (600, 600), (36, 36, 36))
+    d = ImageDraw.Draw(im)
+    for y in range(40, 200, 20):
+        d.rectangle((40, y, 560, y + 2), fill=red)               # 3 px stripes
+    d.rectangle((200, 300, 400, 500), fill=red)                  # a filled block...
+    d.rectangle((188, 288, 412, 512), outline=red, width=3)      # ...ringed by a thin outline
+    out = np.asarray(pipeline.key_bg(im, "black"))
+    assert out[300 + 100, 300, 3] == 255                         # the fill
+    assert out[41, 300, 3] == 255                                # a stripe
+    assert out[289, 300, 3] == 255                               # the outline
+    assert out[20, 20, 3] == 0                                   # background still gone
+
+
+def test_key_black_lifts_bars_split_by_thin_dark_lines():
+    """The facemask of a helmet: red bars a few px wide split by dark lines thinner still. A
+    smoothing thumbnail blends bar and line into dark reds that count as other inks, and the
+    bars came out see-through in patches beside the opaque shell."""
+    red = (200, 28, 50)
+    im = Image.new("RGB", (2048, 2048), (36, 36, 36))
+    d = ImageDraw.Draw(im)
+    d.rectangle((200, 200, 900, 900), fill=red)                  # the shell
+    for i in range(30):
+        x = 1100 + i * 13
+        d.rectangle((x, 300, x + 9, 900), fill=red)              # 10 px bars, 3 px dark gaps
+    im = im.filter(ImageFilter.GaussianBlur(1))                  # anti-aliased, as rendered
+    out = np.asarray(pipeline.key_bg(im, "black"))
+    assert out[600, 500, 3] == 255
+    core = out[350:850, [1100 + i * 13 + 5 for i in range(30)], 3]
+    assert core.min() == 255, core.min()
+
+
+def test_key_black_judges_flat_ink_on_the_picture_before_upscaling():
+    """The upscaler brightens the edges of a thin stripe a shade past the flatness tolerance, so
+    from the upscaled pixels stretches of it are a fade; the picture before upscaling says flat."""
+    red, halo = (200, 28, 50), (222, 34, 58)
+    src = Image.new("RGB", (600, 600), (36, 36, 36))
+    up = Image.new("RGB", (1200, 1200), (36, 36, 36))
+    ds, du = ImageDraw.Draw(src), ImageDraw.Draw(up)
+    ds.rectangle((200, 300, 400, 500), fill=red)
+    du.rectangle((400, 600, 800, 1000), fill=red)
+    for y in range(40, 200, 20):
+        ds.rectangle((40, y, 560, y + 3), fill=red)
+        du.rectangle((80, 2 * y, 1120, 2 * y + 7), fill=halo)  # bright edges...
+        du.rectangle((80, 2 * y + 2, 1120, 2 * y + 5), fill=red)  # ...round the stripe's core
+    assert np.asarray(pipeline.key_bg(up, "black"))[83, 600, 3] < 230   # judged on itself: a fade
+    out = np.asarray(pipeline.key_bg(up, "black", source=src))
+    assert out[83, 600, 3] == 255                                # the stripe's core: solid
+    assert out[800, 600, 3] == 255                               # the block still is
+    assert out[40, 40, 3] == 0
+    # ...and one color across it: the upscaler's bright edges are not the design's.
+    row = out[80:88, 600].astype(int)
+    on_black = row[:, :3] * row[:, 3:] // 255
+    assert np.abs(on_black[2:6] - red).max() <= 4               # the core
+    assert np.abs(on_black[[0, 1, 6, 7]] - red).max() <= 4      # the edges, not lighter
+
+
 def test_key_white_mirror():
     im = Image.new("RGB", (100, 100), (255, 255, 255))
     ImageDraw.Draw(im).rectangle((20, 20, 80, 80), fill=(200, 30, 30))
